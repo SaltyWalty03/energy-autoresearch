@@ -1,29 +1,63 @@
+import time
 import numpy as np
+import pandas as pd
+import yfinance as yf
+from pathlib import Path
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
+_CACHE_DIR = Path(__file__).parent / "data" / "model_cache"
+_WTI_CACHE  = _CACHE_DIR / "wti_daily.parquet"
+
+
+def _load_wti():
+    """
+    Load WTI crude spot from EIA-sourced cache (covers 2020-2026).
+    Falls back to yfinance CL=F if cache is missing.
+    """
+    # Prefer the fresh EIA parquet saved in data/eia_cache/
+    eia_dir = Path(__file__).parent / "data" / "eia_cache"
+    eia_files = sorted(eia_dir.glob("eia_wti_price_*.parquet"),
+                       key=lambda f: f.stat().st_size, reverse=True)
+    if eia_files:
+        df = pd.read_parquet(eia_files[0])
+        s = df.set_index("date")["value"]
+        s.index = pd.to_datetime(s.index)
+        return s.sort_index()
+
+    # Fallback: yfinance CL=F (requires internet)
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if _WTI_CACHE.exists() and (time.time() - _WTI_CACHE.stat().st_mtime) < 82800:
+        return pd.read_parquet(_WTI_CACHE)["close"]
+    try:
+        raw = yf.download("CL=F", start="2019-01-01", auto_adjust=True, progress=False)
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = raw.columns.get_level_values(0)
+        raw[["Close"]].rename(columns={"Close": "close"}).to_parquet(_WTI_CACHE)
+        return raw["Close"]
+    except Exception:
+        return pd.Series(dtype=float)
+
 
 class DirectionModel(BaseEstimator, RegressorMixin):
     """
-    RF direction classifier with two improvements over the prior best:
+    RF direction classifier — improvements over baseline:
 
-    1. 3-year rolling training window  — excludes COVID-era dynamics (2020-2021)
-       that hurt generalisation to the current 2025-2026 regime.
-    2. Exponential sample-decay weights  — gently upweights recent data
-       (weight range ~0.55→1.0) so the model is more adapted to the
-       market regime just before the validation period.
-
-    Core features (6) are unchanged: ret, ret_adj5, mom5, mom20, macd, vol_ratio.
+    1. 3-year rolling training window  (drops COVID 2020-21 regime)
+    2. Exponential sample-decay (0.55→1.0) within that window
+    3. WTI shock filter: output 0 (flat) on days where yesterday's
+       WTI crude return exceeded ±3% — energy-market shocks make
+       the momentum signal unreliable on those days.
     """
 
-    TRAIN_WINDOW = 756   # ~3 years of trading days
-    DECAY_LINSPACE_RANGE = (-1.0, 0.0)  # applied over len(full_train), sliced to window
+    TRAIN_WINDOW     = 756   # ~3 trading years
+    WTI_SHOCK_THRESH = 0.03  # 3% WTI daily move → go flat next day
 
     def __init__(self, window=20, n_estimators=300, max_depth=2, min_samples_leaf=22):
-        self.window = window
-        self.n_estimators = n_estimators
-        self.max_depth = max_depth
+        self.window          = window
+        self.n_estimators    = n_estimators
+        self.max_depth       = max_depth
         self.min_samples_leaf = min_samples_leaf
 
     def _rolling_features(self, r, start_idx):
@@ -43,6 +77,19 @@ class DirectionModel(BaseEstimator, RegressorMixin):
             ])
         return np.array(feats)
 
+    def _wti_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
+        """
+        Returns a boolean array (len(idx)) that is True on days where
+        yesterday's WTI |return| > WTI_SHOCK_THRESH.  Falls back to all-False
+        if WTI data is unavailable, so the model degrades gracefully.
+        """
+        wti = _load_wti()
+        if len(wti) == 0:
+            return np.zeros(len(idx), dtype=bool)
+        wti_ret = np.log(wti + 1e-8).diff(1).shift(1)   # yesterday's return
+        shock = wti_ret.abs() > self.WTI_SHOCK_THRESH
+        return shock.reindex(idx, method="ffill").fillna(False).values
+
     def fit(self, X, y):
         r_full  = np.array(X).ravel()
         y_full  = np.array(y)
@@ -53,16 +100,13 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         r       = r_full[cutoff:]
         y_w     = y_full[cutoff:]
 
-        # Store tail from the FULL series (correct history for predict)
+        # Preserve full tail for rolling-feature continuity in predict()
         self._tail = r_full[-self.window:]
 
-        # ── Exponential sample-decay weights ──────────────────────────────────
-        # Build weights over the full training series, then slice to [cutoff:].
-        # This produces a gentle 0.55→1.0 taper rather than a steep 0.37→1.0.
-        lo, hi = self.DECAY_LINSPACE_RANGE
-        weights = np.exp(np.linspace(lo, hi, n_full))[cutoff:]
+        # ── Exponential sample-decay (full-series linspace, sliced) ───────────
+        weights = np.exp(np.linspace(-1.0, 0.0, n_full))[cutoff:]
 
-        # ── Feature matrix & classifier ───────────────────────────────────────
+        # ── Train ─────────────────────────────────────────────────────────────
         F      = self._rolling_features(r, 0)
         labels = (y_w > 0).astype(int)
 
@@ -84,7 +128,13 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         F   = self._rolling_features(r, len(self._tail))
         F_s = self.scaler_.transform(F)
         proba = self.clf_.predict_proba(F_s)[:, 1]
-        return 2 * proba - 1
+        signal = 2 * proba - 1
+
+        # ── WTI shock filter ──────────────────────────────────────────────────
+        shock = self._wti_shock_mask(X.index)
+        signal[shock] = 0.0
+
+        return signal
 
 
 def build_model():
