@@ -52,7 +52,7 @@ class DirectionModel(BaseEstimator, RegressorMixin):
     """
 
     TRAIN_WINDOW     = 756   # ~3 trading years
-    WTI_SHOCK_THRESH = 0.03  # 3% WTI daily move → go flat next day
+    WTI_SHOCK_THRESH = 0.02  # 2% WTI daily move → go flat next day
 
     def __init__(self, window=20, n_estimators=300, max_depth=2, min_samples_leaf=22):
         self.window          = window
