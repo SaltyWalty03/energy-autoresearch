@@ -103,8 +103,8 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         # Preserve full tail for rolling-feature continuity in predict()
         self._tail = r_full[-self.window:]
 
-        # ── Exponential sample-decay (full-series linspace, sliced) ───────────
-        weights = np.exp(np.linspace(-1.0, 0.0, n_full))[cutoff:]
+        # ── Exponential sample-decay (steeper tilt toward recent data) ──────────
+        weights = np.exp(np.linspace(-0.3, 0.0, n_full))[cutoff:]
 
         # ── Train ─────────────────────────────────────────────────────────────
         F      = self._rolling_features(r, 0)
