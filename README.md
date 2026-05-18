@@ -14,8 +14,6 @@ energy-autoresearch/
 ├── prepare.py             # Data download, feature prep, train/val split
 ├── run.py                 # Single experiment runner → appends to results.tsv
 ├── run_experiments.py     # Hyperparameter grid sweep → produces reports
-├── run_daily.py           # Local one-shot paper-trading signal via Alpaca
-├── run_intraday.py        # Intraday loop: model bias + RSI/MACD via Alpaca
 ├── train_model.py         # Re-trains model.pkl from latest XLE data
 ├── results.tsv            # Append-only experiment log (source of truth)
 ├── results/               # Generated reports and charts
@@ -25,10 +23,6 @@ energy-autoresearch/
 │   ├── openmeteo_fetcher.py
 │   ├── gem_loader.py
 │   └── trends_fetcher.py
-├── cloud_function/        # Google Cloud Function for automated daily trading
-│   ├── main.py
-│   ├── model.py           # Kept in sync with root model.py (see note inside)
-│   └── requirements.txt
 ├── scripts/
 │   └── generate_deliverables.py   # One-shot report generator (already run)
 └── data/                  # Raw data (caches excluded from git)
