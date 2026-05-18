@@ -1,0 +1,7 @@
+{
+  "ticker": "XLE",
+  "wf_sharpe_mean": 0.3226,
+  "wf_sharpe_std": 0.8639,
+  "commodity": "CL=F",
+  "shock_thresh": 0.02
+}

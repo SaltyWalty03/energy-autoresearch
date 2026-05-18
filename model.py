@@ -14,33 +14,37 @@ except ImportError:
     _XGB_AVAILABLE = False
 
 _CACHE_DIR = Path(__file__).parent / "data" / "model_cache"
-_WTI_CACHE  = _CACHE_DIR / "wti_daily.parquet"
 
 
-def _load_wti():
+def _load_commodity(ticker: str = "CL=F") -> pd.Series:
     """
-    Load WTI crude spot from EIA-sourced cache (covers 2020-2026).
-    Falls back to yfinance CL=F if cache is missing.
+    Load daily commodity closing prices.
+    For CL=F (WTI crude) tries the EIA parquet cache first.
+    Falls back to yfinance for all tickers.
     """
-    # Prefer the fresh EIA parquet saved in data/eia_cache/
-    eia_dir = Path(__file__).parent / "data" / "eia_cache"
-    eia_files = sorted(eia_dir.glob("eia_wti_price_*.parquet"),
-                       key=lambda f: f.stat().st_size, reverse=True)
-    if eia_files:
-        df = pd.read_parquet(eia_files[0])
-        s = df.set_index("date")["value"]
-        s.index = pd.to_datetime(s.index)
-        return s.sort_index()
-
-    # Fallback: yfinance CL=F (requires internet)
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if _WTI_CACHE.exists() and (time.time() - _WTI_CACHE.stat().st_mtime) < 82800:
-        return pd.read_parquet(_WTI_CACHE)["close"]
+    safe = ticker.replace("=", "_").replace("/", "_")
+    cache_file = _CACHE_DIR / f"{safe}_daily.parquet"
+
+    # WTI-specific: prefer EIA parquet (offline, covers 2020-2026)
+    if ticker == "CL=F":
+        eia_dir = Path(__file__).parent / "data" / "eia_cache"
+        eia_files = sorted(eia_dir.glob("eia_wti_price_*.parquet"),
+                           key=lambda f: f.stat().st_size, reverse=True)
+        if eia_files:
+            df = pd.read_parquet(eia_files[0])
+            s = df.set_index("date")["value"]
+            s.index = pd.to_datetime(s.index)
+            return s.sort_index()
+
+    # yfinance fallback (all tickers), cached for 23 h
+    if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < 82800:
+        return pd.read_parquet(cache_file)["close"]
     try:
-        raw = yf.download("CL=F", start="2019-01-01", auto_adjust=True, progress=False)
+        raw = yf.download(ticker, start="2019-01-01", auto_adjust=True, progress=False)
         if isinstance(raw.columns, pd.MultiIndex):
             raw.columns = raw.columns.get_level_values(0)
-        raw[["Close"]].rename(columns={"Close": "close"}).to_parquet(_WTI_CACHE)
+        raw[["Close"]].rename(columns={"Close": "close"}).to_parquet(cache_file)
         return raw["Close"]
     except Exception:
         return pd.Series(dtype=float)
@@ -59,8 +63,8 @@ class DirectionModel(BaseEstimator, RegressorMixin):
 
     def __init__(self, window=20, n_estimators=300, max_depth=2,
                  min_samples_leaf=22, train_window=756, wti_thresh=0.02,
-                 model_type="xgb", learning_rate=0.05, subsample=0.8,
-                 colsample_bytree=0.8):
+                 model_type="rf", learning_rate=0.05, subsample=0.8,
+                 colsample_bytree=0.8, commodity_ticker="CL=F"):
         self.window           = window
         self.n_estimators     = n_estimators
         self.max_depth        = max_depth
@@ -71,6 +75,7 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         self.learning_rate    = learning_rate
         self.subsample        = subsample
         self.colsample_bytree = colsample_bytree
+        self.commodity_ticker = commodity_ticker
 
     def _rolling_features(self, r, start_idx):
         feats = []
@@ -89,17 +94,17 @@ class DirectionModel(BaseEstimator, RegressorMixin):
             ])
         return np.array(feats)
 
-    def _wti_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
+    def _commodity_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
         Returns a boolean array (len(idx)) that is True on days where
-        yesterday's WTI |return| > WTI_SHOCK_THRESH.  Falls back to all-False
-        if WTI data is unavailable, so the model degrades gracefully.
+        yesterday's commodity |return| > wti_thresh. Falls back to all-False
+        if data is unavailable so the model degrades gracefully.
         """
-        wti = _load_wti()
-        if len(wti) == 0:
+        prices = _load_commodity(self.commodity_ticker)
+        if len(prices) == 0:
             return np.zeros(len(idx), dtype=bool)
-        wti_ret = np.log(wti + 1e-8).diff(1).shift(1)   # yesterday's return
-        shock = wti_ret.abs() > self.wti_thresh
+        ret = np.log(prices + 1e-8).diff(1).shift(1)   # yesterday's return
+        shock = ret.abs() > self.wti_thresh
         return shock.reindex(idx, method="ffill").fillna(False).values
 
     def fit(self, X, y):
@@ -165,8 +170,8 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         proba = self.clf_.predict_proba(F_s)[:, 1]
         signal = 2 * proba - 1
 
-        # ── WTI shock filter ──────────────────────────────────────────────────
-        shock = self._wti_shock_mask(X.index)
+        # ── Commodity shock filter ────────────────────────────────────────────
+        shock = self._commodity_shock_mask(X.index)
         signal[shock] = 0.0
 
         return signal

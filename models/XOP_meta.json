@@ -1,0 +1,7 @@
+{
+  "ticker": "XOP",
+  "wf_sharpe_mean": 0.4951,
+  "wf_sharpe_std": 0.6363,
+  "commodity": "CL=F",
+  "shock_thresh": 0.02
+}

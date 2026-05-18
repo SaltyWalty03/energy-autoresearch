@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pkl
+models/*.pkl
 data/eia_cache/
 data/openmeteo_cache/
 data/trends_cache/
