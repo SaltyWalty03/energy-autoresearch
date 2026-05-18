@@ -1,3 +1,12 @@
+# SOURCE OF TRUTH: root model.py
+# This file must be kept in sync with ../model.py manually.
+# It exists as a full copy so the Cloud Function deployment (which only
+# packages the cloud_function/ directory) can unpickle DirectionModel
+# without importing from the repo root.
+#
+# When you change model.py, copy the updated content here too, then redeploy:
+#   gcloud functions deploy run_daily --source cloud_function/ ...
+
 import time
 import numpy as np
 import pandas as pd
@@ -16,7 +25,6 @@ def _load_wti():
     Load WTI crude spot from EIA-sourced cache (covers 2020-2026).
     Falls back to yfinance CL=F if cache is missing.
     """
-    # Prefer the fresh EIA parquet saved in data/eia_cache/
     eia_dir = Path(__file__).parent / "data" / "eia_cache"
     eia_files = sorted(eia_dir.glob("eia_wti_price_*.parquet"),
                        key=lambda f: f.stat().st_size, reverse=True)
@@ -80,13 +88,13 @@ class DirectionModel(BaseEstimator, RegressorMixin):
     def _wti_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
         Returns a boolean array (len(idx)) that is True on days where
-        yesterday's WTI |return| > WTI_SHOCK_THRESH.  Falls back to all-False
+        yesterday's WTI |return| > wti_thresh.  Falls back to all-False
         if WTI data is unavailable, so the model degrades gracefully.
         """
         wti = _load_wti()
         if len(wti) == 0:
             return np.zeros(len(idx), dtype=bool)
-        wti_ret = np.log(wti + 1e-8).diff(1).shift(1)   # yesterday's return
+        wti_ret = np.log(wti + 1e-8).diff(1).shift(1)
         shock = wti_ret.abs() > self.wti_thresh
         return shock.reindex(idx, method="ffill").fillna(False).values
 
@@ -104,18 +112,14 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         y_full  = np.array(y)
         n_full  = len(r_full)
 
-        # ── 3-year rolling window ──────────────────────────────────────────────
         cutoff  = max(0, n_full - self.train_window)
         r       = r_full[cutoff:]
         y_w     = y_full[cutoff:]
 
-        # Preserve full tail for rolling-feature continuity in predict()
         self._tail = r_full[-self.window:]
 
-        # ── Exponential sample-decay (steeper tilt toward recent data) ──────────
         weights = np.exp(np.linspace(-0.3, 0.0, n_full))[cutoff:]
 
-        # ── Train ─────────────────────────────────────────────────────────────
         F      = self._rolling_features(r, 0)
         labels = (y_w > 0).astype(int)
 
@@ -139,7 +143,6 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         proba = self.clf_.predict_proba(F_s)[:, 1]
         signal = 2 * proba - 1
 
-        # ── WTI shock filter ──────────────────────────────────────────────────
         shock = self._wti_shock_mask(X.index)
         signal[shock] = 0.0
 

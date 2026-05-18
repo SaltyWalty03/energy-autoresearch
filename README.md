@@ -1,8 +1,8 @@
-# Energy-Autoresearch
+# energy-autoresearch
 
-A structured research sandbox for developing and evaluating predictive models on the **XLE Energy ETF**, using a combination of price momentum features and weather/commodity interaction signals.
+Predictive model for the **XLE Energy ETF** daily return direction, targeting Sharpe Ratio maximization on a 20% chronological holdout.
 
-The goal is to **minimize prediction error** and **maximize the Sharpe Ratio** for Energy ETF returns.
+**Best validated Sharpe: 2.48** (annualised, val period ~2025–2026)
 
 ---
 
@@ -10,99 +10,167 @@ The goal is to **minimize prediction error** and **maximize the Sharpe Ratio** f
 
 ```
 energy-autoresearch/
-├── data/                  # Raw and processed data files
-├── results/               # Saved experiment outputs
-├── src/                   # Additional source modules
-├── data_loader.py         # (auxiliary) data loading utilities
-├── model.py               # The file you modify
-├── prepare.py             # Data download, feature prep, and evaluation (do not edit)
-├── run.py                 # Experiment runner (do not edit)
-├── results.tsv            # Append-only experiment log (timestamp, description, Sharpe)
-└── program.md             # Task rules and data dictionary
+├── model.py               # DirectionModel — edit this to experiment
+├── prepare.py             # Data download, feature prep, train/val split
+├── run.py                 # Single experiment runner → appends to results.tsv
+├── run_experiments.py     # Hyperparameter grid sweep → produces reports
+├── run_daily.py           # Local one-shot paper-trading signal via Alpaca
+├── run_intraday.py        # Intraday loop: model bias + RSI/MACD via Alpaca
+├── train_model.py         # Re-trains model.pkl from latest XLE data
+├── results.tsv            # Append-only experiment log (source of truth)
+├── results/               # Generated reports and charts
+├── src/
+│   ├── data_loader.py     # Alternative-data pipeline (future feature work)
+│   ├── eia_fetcher.py
+│   ├── openmeteo_fetcher.py
+│   ├── gem_loader.py
+│   └── trends_fetcher.py
+├── cloud_function/        # Google Cloud Function for automated daily trading
+│   ├── main.py
+│   ├── model.py           # Kept in sync with root model.py (see note inside)
+│   └── requirements.txt
+├── scripts/
+│   └── generate_deliverables.py   # One-shot report generator (already run)
+└── data/                  # Raw data (caches excluded from git)
 ```
 
 ---
 
 ## How It Works
 
-**`prepare.py`** downloads daily XLE price data from Yahoo Finance (from 2020-01-01), computes a lagged return feature (`ret_lag`) and a next-day log return target (`target`), then splits the dataset 80/20 into train and validation sets.
+**`prepare.py`** downloads daily XLE data from Yahoo Finance (from 2020-01-01), computes `ret_lag` (previous day's % return) and `target` (next-day log return), and splits 80/20 chronologically.
 
-**`model.py`** defines `DirectionModel` — a scikit-learn compatible regressor that:
-- Computes rolling window features (5-day and 20-day momentum, volatility ratios)
-- Trains a `RandomForestClassifier` to predict the direction of the next day's return
-- Outputs a continuous signal in `[-1, 1]` (from class probabilities)
+**`model.py`** defines `DirectionModel` — a Random Forest classifier that:
+- Internally builds six rolling momentum/volatility features from `ret_lag`
+- Trains with a 3-year rolling window and exponential sample-decay
+- Applies a WTI crude shock filter at inference (goes flat when yesterday's WTI |return| > 2%)
+- Outputs a continuous signal in `[-1, 1]` representing directional confidence
 
-**`run.py`** wires everything together: it loads data, fits the model, evaluates it on the validation set, and appends the result to `results.tsv`.
-
-**Evaluation metric:** Annualized Sharpe Ratio, computed as:
+**Evaluation metric:**
 ```
-Sharpe = mean(sign(prediction) * actual_return) / std(...) * sqrt(252)
+Sharpe = mean(sign(prediction) × actual_return) / std(...) × sqrt(252)
 ```
 
 ---
 
 ## Quickstart
 
-### 1. Install dependencies
-
 ```bash
-pip install yfinance scikit-learn numpy pandas
+pip install yfinance scikit-learn numpy pandas alpaca-py python-dotenv pytz
 ```
 
-### 2. Run the baseline experiment
-
+Run a single experiment and log it:
 ```bash
-python run.py "baseline description"
+python run.py "description of this change"
 ```
 
-Results are appended to `results.tsv` with a timestamp, description, and Sharpe Ratio.
+---
+
+## Entry Points
+
+### `run.py` — Single experiment
+```bash
+python run.py "add wti momentum feature"
+```
+Fits the model defined in `model.py`, evaluates on val, appends to `results.tsv`.
+
+### `run_experiments.py` — Hyperparameter grid sweep
+```bash
+python run_experiments.py
+```
+Runs every config in `EXPERIMENT_GRID`, writes `experiment_log.csv`,
+`metric_trajectory.png`, `keep_discard_crash_summary.md`,
+`best_vs_baseline.md`, and `what_actually_worked.md` to `results/`.
+
+### `run_daily.py` — Local paper-trading signal
+```bash
+python run_daily.py
+```
+Loads `model.pkl`, generates today's signal, and places a market order via
+the Alpaca paper API. Use as a fallback when the Cloud Function is unavailable.
+
+### `run_intraday.py` — Intraday trading loop
+```bash
+python run_intraday.py
+```
+Runs continuously during market hours (Mon–Fri 9:30 AM–3:55 PM ET). Uses a
+two-layer signal: `DirectionModel` daily bias gates intraday RSI(14) + MACD
+entries on 5-minute Alpaca bars.
 
 ---
 
-## Rules for Experimentation
+## Modifying the Model
 
-1. **Only modify `model.py`** — `prepare.py` and `run.py` are locked.
-2. Focus on building **interaction features** between weather (`Temp_Anomaly`) and natural gas (`NatGas_Storage`).
-3. Log every experiment with a descriptive message: `python run.py "your description"`.
+Only `model.py` needs to change for experiments. `prepare.py` signatures are
+stable — do not modify them.
 
----
-
-## Data Dictionary
-
-| Field | Description |
-|---|---|
-| `XLE_Close` | Closing price of the XLE Energy ETF |
-| `Temp_Anomaly` | Departure from average temperature |
-| `NatGas_Storage` | Current natural gas storage levels |
-| `ret_lag` | Previous day's percentage return (baseline feature) |
-| `target` | Next day's log return (prediction target) |
-
----
-
-## Extending `model.py`
-
-The `build_model()` function returns a scikit-learn compatible estimator. To experiment, implement a new class or modify `DirectionModel`. Ideas to try:
-
-- Add `Temp_Anomaly × NatGas_Storage` interaction terms
-- Incorporate lagged weather or storage features
-- Swap the classifier (e.g., GradientBoosting, Ridge regression on signals)
-- Tune `window`, `n_estimators`, `max_depth`, `min_samples_leaf`
-
-Example skeleton:
-
+`build_model()` must return a scikit-learn compatible estimator. Current best config:
 ```python
 def build_model():
-    return DirectionModel(n_estimators=300, max_depth=3, min_samples_leaf=15)
+    return DirectionModel(n_estimators=600, max_depth=2, min_samples_leaf=22,
+                          train_window=756, wti_thresh=0.02)
+```
+
+Key `DirectionModel` parameters:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `n_estimators` | 600 | Number of trees |
+| `max_depth` | 2 | Tree depth — main Sharpe lever |
+| `min_samples_leaf` | 22 | Leaf regularisation |
+| `window` | 20 | Rolling feature window (days) |
+| `train_window` | 756 | ~3 years of training data |
+| `wti_thresh` | 0.02 | WTI shock filter threshold |
+
+After every change, run the smoke test:
+```bash
+python run.py "description" && tail -1 results.tsv
+```
+
+Revert if worse:
+```bash
+git checkout model.py
 ```
 
 ---
 
-## Results Log
+## Experiment Log
 
-Experiments are tracked in `results.tsv`:
-
+`results.tsv` is the append-only record of every run:
 ```
 timestamp    description    sharpe
 ```
 
-Each run appends a new row, making it easy to compare experiments over time.
+---
+
+## Cloud Deployment
+
+The Cloud Function in `cloud_function/` runs the intraday two-layer logic
+automatically every 5 minutes during market hours via Cloud Scheduler.
+
+```bash
+# Redeploy after changes to cloud_function/main.py or cloud_function/model.py
+gcloud functions deploy run_daily \
+    --runtime python311 --region us-central1 \
+    --trigger-http --allow-unauthenticated \
+    --source cloud_function/ \
+    --memory 512MB --timeout 120s
+
+# Upload a retrained model to GCS
+gsutil cp model.pkl gs://energy-autoresearch-model/model.pkl
+
+# View recent logs
+gcloud functions logs read run_daily --region us-central1 --limit 20
+```
+
+---
+
+## Next Steps
+
+From `what_actually_worked.md`:
+
+1. **WTI as a second feature** — add `wti_ret_lag` alongside `ret_lag` so the RF learns graded oil-momentum exposure rather than a binary shock filter.
+2. **Gradient boosting** — `HistGradientBoostingRegressor` with a Sharpe-approximating loss typically outperforms RF on small, noisy financial tabular datasets.
+3. **Regime-conditioned models** — partition the training window by WTI 30-day realised volatility quartile; the walk-forward Sharpe variance suggests unmodeled regime structure.
+4. **Bayesian hyperparameter search** — `scikit-optimize BayesSearchCV` over the joint space (depth, leaf, window, wti_thresh); the grid only explored marginal effects.
+5. **Alternative-data features** — `src/data_loader.py` assembles EIA, weather (HDD/CDD), GEM pipeline, and Google Trends signals into a weekly feature matrix, ready to plug into a weekly version of the model.

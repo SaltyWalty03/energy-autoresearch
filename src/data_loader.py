@@ -1,6 +1,20 @@
 """
-data_loader.py — Weekly alternative data feature matrix for XLE/VDE research
-All signals are lagged 1 week before being returned to prevent lookahead bias.
+src/data_loader.py — Alternative-data pipeline for future XLE feature research.
+
+Builds a weekly feature matrix combining EIA petroleum/gas signals, Open-Meteo
+weather (HDD/CDD), GEM pipeline capacity, and Google Trends. All signals are
+lagged 1 week to prevent lookahead bias.
+
+This module is NOT used by the current core pipeline (run.py / model.py), which
+relies only on ret_lag and the WTI shock filter. It is the foundation for the
+next research phase: adding alternative-data features to the DirectionModel.
+
+See what_actually_worked.md § "What to Try Next" for the planned extension.
+
+Usage:
+    from src.data_loader import build_feature_matrix
+    df = build_feature_matrix(start="2018-01-01")
+
 Keys loaded from .env via python-dotenv (never hardcoded).
 """
 
