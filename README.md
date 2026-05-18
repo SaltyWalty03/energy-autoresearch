@@ -76,21 +76,6 @@ Runs every config in `EXPERIMENT_GRID`, writes `experiment_log.csv`,
 `metric_trajectory.png`, `keep_discard_crash_summary.md`,
 `best_vs_baseline.md`, and `what_actually_worked.md` to `results/`.
 
-### `run_daily.py` — Local paper-trading signal
-```bash
-python run_daily.py
-```
-Loads `model.pkl`, generates today's signal, and places a market order via
-the Alpaca paper API. Use as a fallback when the Cloud Function is unavailable.
-
-### `run_intraday.py` — Intraday trading loop
-```bash
-python run_intraday.py
-```
-Runs continuously during market hours (Mon–Fri 9:30 AM–3:55 PM ET). Uses a
-two-layer signal: `DirectionModel` daily bias gates intraday RSI(14) + MACD
-entries on 5-minute Alpaca bars.
-
 ---
 
 ## Modifying the Model
@@ -133,28 +118,6 @@ git checkout model.py
 `results.tsv` is the append-only record of every run:
 ```
 timestamp    description    sharpe
-```
-
----
-
-## Cloud Deployment
-
-The Cloud Function in `cloud_function/` runs the intraday two-layer logic
-automatically every 5 minutes during market hours via Cloud Scheduler.
-
-```bash
-# Redeploy after changes to cloud_function/main.py or cloud_function/model.py
-gcloud functions deploy run_daily \
-    --runtime python311 --region us-central1 \
-    --trigger-http --allow-unauthenticated \
-    --source cloud_function/ \
-    --memory 512MB --timeout 120s
-
-# Upload a retrained model to GCS
-gsutil cp model.pkl gs://energy-autoresearch-model/model.pkl
-
-# View recent logs
-gcloud functions logs read run_daily --region us-central1 --limit 20
 ```
 
 ---
