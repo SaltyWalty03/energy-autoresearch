@@ -7,6 +7,12 @@ from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
+try:
+    import xgboost as xgb
+    _XGB_AVAILABLE = True
+except ImportError:
+    _XGB_AVAILABLE = False
+
 _CACHE_DIR = Path(__file__).parent / "data" / "model_cache"
 _WTI_CACHE  = _CACHE_DIR / "wti_daily.parquet"
 
@@ -52,13 +58,19 @@ class DirectionModel(BaseEstimator, RegressorMixin):
     """
 
     def __init__(self, window=20, n_estimators=300, max_depth=2,
-                 min_samples_leaf=22, train_window=756, wti_thresh=0.02):
+                 min_samples_leaf=22, train_window=756, wti_thresh=0.02,
+                 model_type="xgb", learning_rate=0.05, subsample=0.8,
+                 colsample_bytree=0.8):
         self.window           = window
         self.n_estimators     = n_estimators
         self.max_depth        = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.train_window     = train_window
         self.wti_thresh       = wti_thresh
+        self.model_type       = model_type
+        self.learning_rate    = learning_rate
+        self.subsample        = subsample
+        self.colsample_bytree = colsample_bytree
 
     def _rolling_features(self, r, start_idx):
         feats = []
@@ -122,13 +134,27 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         self.scaler_ = StandardScaler()
         F_s = self.scaler_.fit_transform(F)
 
-        self.clf_ = RandomForestClassifier(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            min_samples_leaf=self.min_samples_leaf,
-            max_features="sqrt",
-            random_state=42,
-        )
+        if self.model_type == "xgb":
+            if not _XGB_AVAILABLE:
+                raise ImportError("xgboost is not installed. Run: pip install xgboost")
+            self.clf_ = xgb.XGBClassifier(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                learning_rate=self.learning_rate,
+                subsample=self.subsample,
+                colsample_bytree=self.colsample_bytree,
+                eval_metric="logloss",
+                random_state=42,
+                verbosity=0,
+            )
+        else:
+            self.clf_ = RandomForestClassifier(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                min_samples_leaf=self.min_samples_leaf,
+                max_features="sqrt",
+                random_state=42,
+            )
         self.clf_.fit(F_s, labels, sample_weight=weights)
         return self
 
@@ -148,4 +174,4 @@ class DirectionModel(BaseEstimator, RegressorMixin):
 
 def build_model():
     return DirectionModel(n_estimators=600, max_depth=2, min_samples_leaf=22,
-                          train_window=756, wti_thresh=0.02)
+                          train_window=756, wti_thresh=0.02, model_type="rf")
