@@ -6,7 +6,8 @@ metric_trajectory.png, keep_discard_crash_summary.md, best_vs_baseline.md,
 and what_actually_worked.md to the repo root.
 
 Usage:
-    python run_experiments.py
+    python run_experiments.py                   # normal grid sweep
+    python run_experiments.py --regime-analysis # sweep perplexity x n_clusters
 """
 import sys, json, warnings
 import numpy as np
@@ -22,7 +23,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 from prepare import load_and_split_data, evaluate
-from model import DirectionModel
+from model import DirectionModel, build_feature_matrix
 
 # ── Load data once ────────────────────────────────────────────────────────────
 print("Loading XLE data from yfinance (once)...")
@@ -293,3 +294,68 @@ print("[v] what_actually_worked.md written")
 
 print("\n=== All deliverables complete ===")
 print(df_log[["run_id", "final_metric", "status"]].to_string(index=False))
+
+
+# ── Regime analysis (--regime-analysis flag) ──────────────────────────────────
+
+def run_regime_analysis():
+    """
+    Sweep perplexity x n_clusters, select config that maximises between-regime
+    Sharpe variance on the XLE validation set. Writes results/regime_analysis.csv
+    and prints the winning config.
+    """
+    from src.regime import fit_regimes, between_regime_sharpe_variance
+
+    PERPLEXITIES = [15, 30, 50]
+    N_CLUSTERS   = [3, 4, 5]
+
+    print("\n=== Regime Analysis ===")
+    print("Loading XLE data...")
+    _train, _val = load_and_split_data("XLE")
+    full = pd.concat([_train, _val])
+
+    returns_arr = full["ret_lag"].values.astype(np.float64)
+    feat_matrix = build_feature_matrix(returns_arr)
+    valid = np.isfinite(feat_matrix).all(axis=1)
+    feat_clean  = feat_matrix[valid]
+    full_clean  = full.iloc[np.where(valid)[0]].reset_index(drop=True)
+
+    # Fit a baseline DirectionModel for predictions
+    base = DirectionModel(n_estimators=600, max_depth=2, min_samples_leaf=22,
+                          train_window=756, wti_thresh=0.02, model_type="rf")
+    base.fit(full_clean[["ret_lag"]], full_clean["target"])
+    preds   = base.predict(full_clean[["ret_lag"]])
+    targets = full_clean["target"].values
+
+    rows = []
+    best_var, best_cfg, best_regime = -1.0, None, None
+
+    for perp in PERPLEXITIES:
+        for nc in N_CLUSTERS:
+            print(f"  perplexity={perp}  n_clusters={nc} ...", end=" ", flush=True)
+            try:
+                rm = fit_regimes(feat_clean, perplexity=perp, n_clusters=nc)
+                var = between_regime_sharpe_variance(rm.labels, preds, targets)
+                print(f"n_regimes={rm.n_regimes}  sharpe_var={var:.4f}")
+                rows.append({"perplexity": perp, "n_clusters": nc,
+                             "n_regimes_found": rm.n_regimes, "sharpe_var": var})
+                if var > best_var:
+                    best_var, best_cfg, best_regime = var, (perp, nc), rm
+            except Exception as exc:
+                print(f"FAILED: {exc}")
+                rows.append({"perplexity": perp, "n_clusters": nc,
+                             "n_regimes_found": None, "sharpe_var": None})
+
+    df_ra = pd.DataFrame(rows)
+    out   = HERE / "results" / "regime_analysis.csv"
+    df_ra.to_csv(out, index=False)
+    print(f"\nResults saved -> results/regime_analysis.csv")
+
+    if best_cfg:
+        print(f"\nBest config: perplexity={best_cfg[0]}  n_clusters={best_cfg[1]}"
+              f"  sharpe_var={best_var:.4f}  n_regimes={best_regime.n_regimes}")
+        print(df_ra.sort_values("sharpe_var", ascending=False).to_string(index=False))
+
+
+if "--regime-analysis" in sys.argv:
+    run_regime_analysis()

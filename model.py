@@ -180,3 +180,27 @@ class DirectionModel(BaseEstimator, RegressorMixin):
 def build_model():
     return DirectionModel(n_estimators=600, max_depth=2, min_samples_leaf=22,
                           train_window=756, wti_thresh=0.02, model_type="rf")
+
+
+def build_feature_matrix(returns: np.ndarray) -> np.ndarray:
+    """
+    Compute the same 6 rolling momentum/volatility features used inside
+    DirectionModel, given a 1-D array of daily percentage returns.
+    Returns an (n, 6) float64 array — one row per input observation.
+    Used externally by the regime layer and plotting scripts.
+    """
+    feats = []
+    for i in range(len(returns)):
+        w5  = returns[max(0, i - 4): i + 1]
+        w20 = returns[max(0, i - 19): i + 1]
+        v5  = np.std(w5)  + 1e-8
+        v20 = np.std(w20) + 1e-8
+        feats.append([
+            returns[i],
+            returns[i] / v5,
+            float(np.mean(w5)),
+            float(np.mean(w20)),
+            float(np.mean(w5)) / (float(np.mean(w20)) + 1e-8),
+            v5 / v20,
+        ])
+    return np.array(feats, dtype=np.float64)

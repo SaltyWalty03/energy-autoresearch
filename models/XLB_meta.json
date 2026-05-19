@@ -1,7 +1,7 @@
 {
   "ticker": "XLB",
-  "wf_sharpe_mean": 0.4438,
-  "wf_sharpe_std": 0.131,
+  "wf_sharpe_mean": 0.4572,
+  "wf_sharpe_std": 0.1212,
   "commodity": "HG=F",
   "shock_thresh": 0.025
 }

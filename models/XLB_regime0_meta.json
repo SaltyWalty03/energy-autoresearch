@@ -1,0 +1,8 @@
+{
+  "ticker": "XLB",
+  "regime": 0,
+  "n_rows": 306,
+  "wf_sharpe_mean": 0.2836,
+  "wf_sharpe_std": 0.5428,
+  "fallback": false
+}

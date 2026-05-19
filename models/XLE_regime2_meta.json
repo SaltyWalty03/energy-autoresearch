@@ -1,0 +1,8 @@
+{
+  "ticker": "XLE",
+  "regime": 2,
+  "n_rows": 159,
+  "wf_sharpe_mean": 0.7499,
+  "wf_sharpe_std": 0.9795,
+  "fallback": false
+}
