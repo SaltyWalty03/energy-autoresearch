@@ -318,7 +318,7 @@ def run_regime_analysis():
     feat_matrix = build_feature_matrix(returns_arr)
     valid = np.isfinite(feat_matrix).all(axis=1)
     feat_clean  = feat_matrix[valid]
-    full_clean  = full.iloc[np.where(valid)[0]].reset_index(drop=True)
+    full_clean  = full.iloc[np.where(valid)[0]]   # keep DatetimeIndex for WTI mask
 
     # Fit a baseline DirectionModel for predictions
     base = DirectionModel(n_estimators=600, max_depth=2, min_samples_leaf=22,

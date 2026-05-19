@@ -2,7 +2,7 @@
   "ticker": "XLB",
   "regime": 1,
   "n_rows": 1294,
-  "wf_sharpe_mean": -0.0459,
-  "wf_sharpe_std": 0.4351,
+  "wf_sharpe_mean": -0.063,
+  "wf_sharpe_std": 0.4384,
   "fallback": false
 }

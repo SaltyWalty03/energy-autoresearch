@@ -55,7 +55,7 @@ def _reassign_noise(labels: np.ndarray, embedding: np.ndarray) -> np.ndarray:
 def fit_regimes(
     feature_matrix: np.ndarray,
     perplexity: int = 30,
-    n_clusters: int = 4,
+    n_clusters: int = 5,
 ) -> RegimeModel:
     """
     Discover market regimes.
