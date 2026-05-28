@@ -1,0 +1,8 @@
+experiment_id,model,dataset,train_size,val_size,split_date,n_estimators,max_depth,min_samples_leaf,train_window,wti_thresh,shock_filter,rolling_features,sample_weights,val_sharpe,wf_sharpe_mean,wf_sharpe_std,runtime_seconds,description
+exp_001,LinearRegression,XLE,1284,322,2025-02-12,N/A,N/A,N/A,N/A,N/A,False,False,False,0.5932,0.0,0.0,0.01,Baseline: LinearRegression on ret_lag only
+exp_002,"RF(n=200,d=2,msl=22)",XLE,1284,322,2025-02-12,200,2,22,756,99.0,False,True,True,1.8282,0.337,0.5837,2.01,"RF direction classifier — Session 1 best (n=200, depth=2, msl=22, no shock filter)"
+exp_003,"RF(n=300,d=2,msl=22)+ShockFilter(0.02)",XLE,1284,322,2025-02-12,300,2,22,756,0.02,True,True,True,1.9616,0.3012,0.8492,1.46,"RF sweep baseline (n=300, depth=2, msl=22, wti_thresh=2%)"
+exp_004,"RF(n=300,d=4,msl=22)+ShockFilter(0.02)",XLE,1284,322,2025-02-12,300,4,22,756,0.02,True,True,True,2.4791,0.1485,1.1746,1.86,"RF depth ablation (n=300, depth=4, msl=22, wti_thresh=2%) — run_003"
+exp_005,"RF(n=600,d=2,msl=22)+ShockFilter(0.02)",XLE,1284,322,2025-02-12,600,2,22,756,0.02,True,True,True,2.2959,0.1998,0.9456,4.41,"RF best sweep (n=600, depth=2, msl=22, wti_thresh=2%) — run_009"
+exp_006,"RF(n=300,d=2,msl=22)",XLE,1284,322,2025-02-12,300,2,22,756,99.0,False,True,True,1.8296,0.4611,0.823,2.62,"RF shock-filter ablation — no WTI filter (n=300, depth=2, msl=22)"
+exp_007,"RF(n=300,d=2,msl=22)+ShockFilter(0.02)",XLE,1284,322,2025-02-12,300,2,22,504,0.02,True,True,True,1.0928,0.246,0.4804,1.59,"RF training-window ablation (n=300, depth=2, msl=22, train_window=504, wti_thresh=2%)"

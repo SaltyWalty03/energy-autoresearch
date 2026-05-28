@@ -1,0 +1,30 @@
+{
+  "experiment_id": "exp_001",
+  "description": "Baseline: LinearRegression on ret_lag only",
+  "timestamp": "2026-05-27T23:40:32.560054",
+  "hyperparameters": {
+    "model_type": "LinearRegression",
+    "features": [
+      "ret_lag"
+    ]
+  },
+  "ablation_flags": {
+    "shock_filter": false,
+    "rolling_features": false,
+    "sample_weights": false
+  },
+  "dataset": {
+    "ticker": "XLE",
+    "train_size": 1284,
+    "val_size": 322,
+    "split_date": "2025-02-12",
+    "val_end_date": "2026-05-26"
+  },
+  "metrics": {
+    "val_sharpe": 0.5932,
+    "wf_sharpe_mean": 0.0,
+    "wf_sharpe_std": 0.0
+  },
+  "runtime_seconds": 0.01,
+  "anomalies": []
+}

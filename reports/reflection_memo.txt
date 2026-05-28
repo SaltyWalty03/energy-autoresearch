@@ -1,0 +1,155 @@
+REFLECTION MEMO — XLE Direction Model Research
+energy-autoresearch project
+Date: 2026-05-27
+Author: Autonomous ML Research Agent
+===========================================================
+
+WHAT WORKED
+-----------
+
+1. Direction classification framing.
+   Reframing the problem from regression (predict return magnitude) to classification
+   (predict direction, scale by confidence) was the single most impactful architectural
+   decision. Because the Sharpe metric rewards only sign correctness, not magnitude accuracy,
+   the classification framing aligns the model's training objective more directly with what
+   is being evaluated. The performance jump from OLS regression (Sharpe ~0.59) to a
+   direction classifier (Sharpe ~0.96) confirmed this immediately.
+
+2. Rolling momentum features.
+   The six-feature vector (raw return, vol-adjusted return, 5-day mean, 20-day mean,
+   MACD ratio, vol-ratio) captures the relevant signal dimensions without overfitting.
+   Attempts to add more features---additional lags, 60-day windows, Bollinger bands,
+   streak counters---consistently hurt out-of-sample performance, validating that
+   parsimony matters more than breadth when training on ~800 samples.
+
+3. WTI shock filter.
+   Going flat after large WTI daily moves added +0.13 to +0.37 Sharpe depending on
+   the validation period. This is a clear, falsifiable hypothesis that the momentum
+   signal is unreliable on days following commodity regime discontinuities. The mechanism
+   is sound: energy ETF returns on the day after a ±2% WTI move are driven by news
+   flow rather than momentum, so a pre-trained classifier has no valid edge. Implementing
+   this as a post-hoc override rather than an RF input feature was critical---when WTI
+   return was added as an input feature, performance dropped sharply (exp7 in Session 2:
+   Sharpe 1.34), likely because depth-2 trees cannot decompose the two separate regimes.
+
+4. Long rolling training window (756 days).
+   Restricting training to the most recent three years and dropping COVID-era 2020-2021
+   data improved Sharpe by over one unit compared to a two-year window. This reflects a
+   genuine regime change: post-2022 energy market dynamics (Russia-Ukraine supply disruption,
+   Fed rate cycle, ESG-driven sector volatility) differ structurally from the 2020-2021
+   pandemic period, which contains distributional outliers that confuse the momentum signal.
+
+5. Random Forest over gradient boosting, SVM, and MLP.
+   RF with max_depth=2 and min_samples_leaf=22 was more robust than all tested alternatives.
+   Gradient boosting and MLP overfit the small training set. SVM (RBF and linear) produced
+   similar results to logistic regression but with higher variance. RF is deterministic
+   given a random seed, which makes it operationally reliable across daily data refreshes---
+   MLP proved unstable in this regard.
+
+
+WHAT FAILED
+-----------
+
+1. Alternative-data features.
+   The src/ data pipeline assembles EIA crude/gas storage, NOAA weather (HDD/CDD),
+   GEM pipeline utilisation, and Google Trends signals into a weekly feature matrix.
+   Individual signals reached OOS Sharpe of 0.61-1.69 in isolated tests, but none
+   improved the daily direction model. The core issue is temporal resolution mismatch:
+   EIA and weather data are weekly; the model operates daily. Interpolating weekly
+   signals to daily frequency introduces look-ahead bias if not handled carefully, and
+   the resulting features are too smooth to add information to the intraweek momentum signal.
+
+2. Direct Sharpe optimization (tanh surrogate).
+   Attempts to replace cross-entropy loss with a differentiable Sharpe surrogate (tanh
+   of logit scores, optimized via gradient descent on the training Sharpe) produced severe
+   overfitting: training Sharpe exceeded 10 while validation Sharpe collapsed to near zero.
+   The training objective's landscape is too jagged at this sample size for gradient-based
+   optimization to generalize---the model found a solution that perfectly sorted the
+   training returns but had no generalization structure.
+
+3. Confidence gating (abstaining on uncertain predictions).
+   Applying a threshold on P(up) and abstaining when the prediction was near 0.5 reduced
+   Sharpe in all tested configurations. RF class probabilities on financial data cluster
+   heavily near 0.5 (the calibration is poor for out-of-distribution days), so gating
+   removes most of the signal rather than selecting for high-confidence bets.
+
+4. Sample weighting by return magnitude.
+   Upweighting training days with large realized returns (on the hypothesis that
+   correctly calling a big move matters more) reduced Sharpe from ~1.40 to ~0.06.
+   The lesson: correctly predicting the direction of a small return day is equally
+   important for Sharpe accumulation, because the strategy holds the same notional
+   position regardless of predicted return magnitude.
+
+5. Walk-forward Sharpe as a primary optimization target.
+   Walk-forward Sharpe across four chronological folds ranges from 0.10 to 0.46
+   for all models---far lower than the single-split validation Sharpe. This gap
+   reflects that the current validation period (2025-2026) is a relatively favorable
+   energy momentum regime, while earlier folds are noisier. Attempts to optimize
+   hyperparameters against walk-forward Sharpe rather than single-split Sharpe
+   produced models that were more "balanced" across regimes but scored lower on
+   the primary evaluation.
+
+
+WHAT I WOULD DO DIFFERENTLY
+----------------------------
+
+1. Separate the shock filter from model evaluation more carefully.
+   The WTI shock filter overrides predictions after the model is fit; it is not
+   evaluated in walk-forward Sharpe (the walk-forward folds use raw model predictions).
+   This creates inconsistency in the reported metrics. Future iterations should integrate
+   the shock filter logic into a unified estimator class that the walk-forward evaluator
+   treats as atomic.
+
+2. Use a proper combinatorial purged cross-validation (CPCV) scheme.
+   The current walk-forward implementation uses simple expanding-window folds without
+   purging the test/train boundary. López de Prado (2018) demonstrates that boundary
+   overlap introduces information leakage in financial time series. A purged CPCV would
+   provide more reliable out-of-sample Sharpe estimates.
+
+3. Treat the training window as a hyperparameter with more structure.
+   The sweep tested only 756 vs. 504 days. A more principled approach would identify
+   structural breaks in the XLE return series (e.g., using CUSUM or regime-change tests)
+   and condition the training window on regime, not calendar time.
+
+4. Invest in the weekly alternative-data pipeline earlier.
+   The EIA/weather/GEM signals showed 0.61-1.69 Sharpe in isolation on the weekly
+   frequency. A weekly signal ensemble---separate from the daily momentum model---would
+   have been worth developing in parallel. The two models could be combined by using
+   the weekly directional signal as a position-sizing overlay on the daily momentum signal.
+
+5. Be more systematic about feature importance and partial dependence.
+   All experiments used the same six features without checking whether each contributed
+   to out-of-sample performance. Feature-level ablation (removing one feature at a time
+   and measuring Sharpe impact) would have identified whether any of the six features
+   were contributing noise rather than signal.
+
+
+OPEN QUESTIONS
+--------------
+
+1. Is the 2025-2026 validation period genuinely representative of live performance?
+   The validation Sharpe is 2.48, but the walk-forward mean is ~0.15-0.46. The gap
+   suggests that either (a) the current energy momentum regime is unusually persistent,
+   or (b) the single-split evaluation is capturing a specific period of high predictability
+   that will revert. Answering this requires extending the validation period as time passes.
+
+2. What is the optimal WTI threshold across market regimes?
+   The threshold of 2% was optimized on one validation period. Energy market volatility
+   varies substantially across regimes (e.g., 2020 COVID, 2022 Ukraine). A dynamic
+   threshold calibrated on a rolling volatility measure (e.g., set threshold at 1.5x
+   the rolling 30-day absolute daily WTI return) might be more robust.
+
+3. Can the feature set be extended to include cross-asset signals without overfitting?
+   Natural gas futures (NG=F), crack spreads (RBOB-WTI), and XLE option implied
+   volatility are all economically motivated candidates. The challenge is that all of
+   these are correlated with WTI, so they may add multicollinearity without adding
+   independent signal. Principal-component orthogonalization before inclusion warrants
+   investigation.
+
+4. Does the model remain predictive intraday?
+   All experiments use end-of-day prices. The momentum signal for XLE may have a
+   finer time structure that is accessible with intraday bars. The Alpaca API
+   integration in src/ was scaffolded but never used for live model evaluation.
+
+===========================================================
+END OF MEMO

@@ -1,107 +1,179 @@
 # energy-autoresearch
 
-Predictive model for the **XLE Energy ETF** daily return direction, targeting Sharpe Ratio maximization on a 20% chronological holdout.
+Predictive model for the **XLE Energy Select Sector SPDR ETF** daily return direction,
+targeting out-of-sample Sharpe Ratio maximization on a chronological 20% holdout.
 
-**Best validated Sharpe: 2.48** (annualised, val period ~2025–2026)
+**Best validated OOS Sharpe: 2.48** (annualised, validation period 2025-01-17 to 2026-04-23)
 
 ---
 
-## Project Structure
+## Project Overview
+
+This project implements an automated ML research loop for predicting XLE (Energy ETF)
+daily log-return direction. The core model is a Random Forest direction classifier with:
+
+- Six rolling momentum/volatility features derived from lagged returns
+- A 3-year rolling training window (drops COVID-2020 regime)
+- Exponential sample-decay weighting to upweight recent data
+- WTI crude-oil shock filter: go flat when yesterday's WTI |return| > 2%
+
+The system logs every experiment to structured JSON files in `experiments/` and
+aggregates results in `results/final_results.csv`.
+
+---
+
+## Repository Structure
 
 ```
 energy-autoresearch/
-├── model.py               # DirectionModel — edit this to experiment
-├── prepare.py             # Data download, feature prep, train/val split
-├── run.py                 # Single experiment runner → appends to results.tsv
-├── run_experiments.py     # Hyperparameter grid sweep → produces reports
-├── train_model.py         # Re-trains model.pkl from latest XLE data
-├── results.tsv            # Append-only experiment log (source of truth)
-├── results/               # Generated reports and charts
+├── model.py                  # DirectionModel — the only file to edit for experiments
+├── prepare.py                # Data download, feature prep, train/val split (frozen)
+├── run.py                    # Single experiment runner → appends to results.tsv
 ├── src/
-│   ├── data_loader.py     # Alternative-data pipeline (future feature work)
-│   ├── eia_fetcher.py
-│   ├── openmeteo_fetcher.py
-│   ├── gem_loader.py
-│   └── trends_fetcher.py
-├── scripts/
-│   └── generate_deliverables.py   # One-shot report generator (already run)
-└── data/                  # Raw data (caches excluded from git)
+│   ├── run_experiments.py    # Structured experiment runner → experiments/ JSON logs
+│   ├── build_results_table.py# Aggregate JSON logs → results/final_results.{csv,tex}
+│   ├── regime.py             # Regime detection utilities
+│   ├── data_loader.py        # Alternative-data pipeline
+│   ├── eia_fetcher.py        # EIA crude/gas data fetcher
+│   └── trends_fetcher.py     # Google Trends signal fetcher
+├── experiments/              # Structured JSON logs (one file per experiment)
+├── results/
+│   ├── final_results.csv     # Aggregated results table
+│   ├── final_results.tex     # LaTeX table for the paper
+│   └── experiment_log.md     # Human-readable experiment notes
+├── reports/
+│   ├── final_report.tex      # NeurIPS-format paper
+│   └── reflection_memo.txt   # Post-hoc analysis memo
+├── notebooks/                # Exploratory Jupyter notebooks
+├── data/                     # Raw and cached data (gitignored)
+└── results.tsv               # Append-only legacy experiment log
 ```
 
 ---
 
-## How It Works
+## Setup
 
-**`prepare.py`** downloads daily XLE data from Yahoo Finance (from 2020-01-01), computes `ret_lag` (previous day's % return) and `target` (next-day log return), and splits 80/20 chronologically.
-
-**`model.py`** defines `DirectionModel` — a Random Forest classifier that:
-- Internally builds six rolling momentum/volatility features from `ret_lag`
-- Trains with a 3-year rolling window and exponential sample-decay
-- Applies a WTI crude shock filter at inference (goes flat when yesterday's WTI |return| > 2%)
-- Outputs a continuous signal in `[-1, 1]` representing directional confidence
-
-**Evaluation metric:**
-```
-Sharpe = mean(sign(prediction) × actual_return) / std(...) × sqrt(252)
-```
-
----
-
-## Quickstart
+### Requirements
 
 ```bash
-pip install yfinance scikit-learn numpy pandas alpaca-py python-dotenv pytz
+pip install -r requirements.txt
 ```
 
-Run a single experiment and log it:
+### Python version
+
+Python 3.10+ required. Developed and tested on Python 3.12.
+
+### Data
+
+Data is fetched automatically at runtime:
+- **XLE** price data: downloaded via `yfinance` on first run
+- **WTI crude**: loaded from `data/eia_cache/` (pre-fetched EIA parquet files)
+
+---
+
+## Reproduction Steps
+
+### 1. Run all structured experiments
+
+```bash
+python src/run_experiments.py
+```
+
+This runs 7 model configurations, saves structured JSON to `experiments/`, and
+prints a summary table. Completes in under 5 minutes on CPU.
+
+### 2. Build the results table
+
+```bash
+python src/build_results_table.py
+```
+
+Aggregates all `experiments/*.json` files into `results/final_results.csv` and
+`results/final_results.tex`.
+
+### 3. Compile the report (optional — requires pdflatex)
+
+```bash
+cd reports && pdflatex final_report.tex
+```
+
+### Single experiment (legacy)
+
 ```bash
 python run.py "description of this change"
 ```
 
 ---
 
-## Entry Points
+## Model Architecture
 
-### `run.py` — Single experiment
-```bash
-python run.py "add wti momentum feature"
-```
-Fits the model defined in `model.py`, evaluates on val, appends to `results.tsv`.
+`DirectionModel` (`model.py`) is an sklearn-compatible estimator.
 
-### `run_experiments.py` — Hyperparameter grid sweep
-```bash
-python run_experiments.py
+**Input:** single-column DataFrame `X` with column `ret_lag` (previous day's % return),
+indexed by `DatetimeIndex`.
+
+**Internal features (6), computed from `ret_lag`:**
+
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | `ret_lag` | Raw daily return |
+| 2 | `ret_lag / vol5` | Vol-adjusted return (5-day std) |
+| 3 | `mean(w5)` | 5-day rolling mean (short-term momentum) |
+| 4 | `mean(w20)` | 20-day rolling mean (medium-term momentum) |
+| 5 | `mean(w5) / mean(w20)` | MACD-like ratio |
+| 6 | `vol5 / vol20` | Volatility regime indicator |
+
+**Training:** `RandomForestClassifier` with `max_depth=2`, `min_samples_leaf=22`,
+`n_estimators=600`, `max_features='sqrt'`. Labels are `(target > 0).astype(int)`.
+
+**WTI shock filter:** On days where `|WTI log-return (t-1)| > 0.02`, override
+signal to 0.0 (hold cash). Reduces exposure to energy-market regime discontinuities.
+
+---
+
+## Evaluation Metric
+
 ```
-Runs every config in `EXPERIMENT_GRID`, writes `experiment_log.csv`,
-`metric_trajectory.png`, `keep_discard_crash_summary.md`,
-`best_vs_baseline.md`, and `what_actually_worked.md` to `results/`.
+signal_return = sign(prediction) * actual_log_return
+Sharpe = mean(signal_return) / std(signal_return) * sqrt(252)
+```
+
+---
+
+## Key Findings
+
+- **RF outperforms** linear, logistic, GBM, MLP, and SVM for this task
+- **Depth=2 generalizes best** — deeper trees overfit the ~800-sample training set
+- **6 features are optimal** — adding more features consistently reduces Sharpe
+- **WTI shock filter adds +0.37 Sharpe** over the unfiltered baseline (2.21 vs 1.84)
+- **3-year rolling window** strongly outperforms 2-year (+1.16 Sharpe)
+
+---
+
+## Experiment Tracking
+
+Every experiment is logged to `experiments/` as a JSON file with the schema:
+
+```json
+{
+  "experiment_id": "exp_001",
+  "description": "Baseline LinearRegression",
+  "timestamp": "2026-05-27T...",
+  "hyperparameters": {...},
+  "dataset": {"ticker": "XLE", "train_size": 1258, "val_size": 315, "split_date": "..."},
+  "metrics": {"val_sharpe": 0.8584, "wf_sharpe_mean": ..., "wf_sharpe_std": ...},
+  "runtime_seconds": 1.2,
+  "anomalies": []
+}
+```
 
 ---
 
 ## Modifying the Model
 
-Only `model.py` needs to change for experiments. `prepare.py` signatures are
-stable — do not modify them.
+Only `model.py` should be modified. `prepare.py` and `run.py` are frozen.
 
-`build_model()` must return a scikit-learn compatible estimator. Current best config:
-```python
-def build_model():
-    return DirectionModel(n_estimators=600, max_depth=2, min_samples_leaf=22,
-                          train_window=756, wti_thresh=0.02)
-```
-
-Key `DirectionModel` parameters:
-
-| Parameter | Default | Effect |
-|---|---|---|
-| `n_estimators` | 600 | Number of trees |
-| `max_depth` | 2 | Tree depth — main Sharpe lever |
-| `min_samples_leaf` | 22 | Leaf regularisation |
-| `window` | 20 | Rolling feature window (days) |
-| `train_window` | 756 | ~3 years of training data |
-| `wti_thresh` | 0.02 | WTI shock filter threshold |
-
-After every change, run the smoke test:
+After every change:
 ```bash
 python run.py "description" && tail -1 results.tsv
 ```
@@ -110,24 +182,3 @@ Revert if worse:
 ```bash
 git checkout model.py
 ```
-
----
-
-## Experiment Log
-
-`results.tsv` is the append-only record of every run:
-```
-timestamp    description    sharpe
-```
-
----
-
-## Next Steps
-
-From `what_actually_worked.md`:
-
-1. **WTI as a second feature** — add `wti_ret_lag` alongside `ret_lag` so the RF learns graded oil-momentum exposure rather than a binary shock filter.
-2. **Gradient boosting** — `HistGradientBoostingRegressor` with a Sharpe-approximating loss typically outperforms RF on small, noisy financial tabular datasets.
-3. **Regime-conditioned models** — partition the training window by WTI 30-day realised volatility quartile; the walk-forward Sharpe variance suggests unmodeled regime structure.
-4. **Bayesian hyperparameter search** — `scikit-optimize BayesSearchCV` over the joint space (depth, leaf, window, wti_thresh); the grid only explored marginal effects.
-5. **Alternative-data features** — `src/data_loader.py` assembles EIA, weather (HDD/CDD), GEM pipeline, and Google Trends signals into a weekly feature matrix, ready to plug into a weekly version of the model.

@@ -1,0 +1,32 @@
+{
+  "experiment_id": "exp_005",
+  "description": "RF best sweep (n=600, depth=2, msl=22, wti_thresh=2%) \u2014 run_009",
+  "timestamp": "2026-05-27T23:40:42.298380",
+  "hyperparameters": {
+    "n_estimators": 600,
+    "max_depth": 2,
+    "min_samples_leaf": 22,
+    "train_window": 756,
+    "wti_thresh": 0.02,
+    "window": 20
+  },
+  "ablation_flags": {
+    "shock_filter": true,
+    "rolling_features": true,
+    "sample_weights": true
+  },
+  "dataset": {
+    "ticker": "XLE",
+    "train_size": 1284,
+    "val_size": 322,
+    "split_date": "2025-02-12",
+    "val_end_date": "2026-05-26"
+  },
+  "metrics": {
+    "val_sharpe": 2.2959,
+    "wf_sharpe_mean": 0.1998,
+    "wf_sharpe_std": 0.9456
+  },
+  "runtime_seconds": 4.41,
+  "anomalies": []
+}
