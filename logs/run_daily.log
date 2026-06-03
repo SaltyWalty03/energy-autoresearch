@@ -1,0 +1,124 @@
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 37, in <module>
+    from alpaca.trading.client import TradingClient
+ModuleNotFoundError: No module named 'alpaca'
+The system cannot find the path specified.
+
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.2.6 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+Traceback (most recent call last):  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 34, in <module>
+    import pandas as pd
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\__init__.py", line 58, in <module>
+    from pandas.core.api import (
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\api.py", line 27, in <module>
+    from pandas.core.arrays import Categorical
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\arrays\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\arrays\arrow\__init__.py", line 5, in <module>
+    from pandas.core.arrays.arrow.array import ArrowExtensionArray
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 65, in <module>
+    from pandas.core import (
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\ops\__init__.py", line 9, in <module>
+    from pandas.core.ops.array_ops import (
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\ops\array_ops.py", line 55, in <module>
+    from pandas.core.computation import expressions
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\computation\expressions.py", line 23, in <module>
+    from pandas.core.computation.check import NUMEXPR_INSTALLED
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\computation\check.py", line 5, in <module>
+    ne = import_optional_dependency("numexpr", errors="warn")
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\compat\_optional.py", line 158, in import_optional_dependency
+    module = importlib.import_module(name)
+  File "C:\Users\wpbro\miniconda3\Lib\importlib\__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\numexpr\__init__.py", line 24, in <module>
+    from numexpr.interpreter import MAX_THREADS, use_vml, __BLOCK_SIZE1__
+AttributeError: _ARRAY_API not found
+
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.2.6 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+Traceback (most recent call last):  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 34, in <module>
+    import pandas as pd
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\__init__.py", line 58, in <module>
+    from pandas.core.api import (
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\api.py", line 27, in <module>
+    from pandas.core.arrays import Categorical
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\arrays\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\arrays\arrow\__init__.py", line 5, in <module>
+    from pandas.core.arrays.arrow.array import ArrowExtensionArray
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\arrays\arrow\array.py", line 79, in <module>
+    from pandas.core.arrays.masked import BaseMaskedArray
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\arrays\masked.py", line 56, in <module>
+    from pandas.core import (
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\core\nanops.py", line 54, in <module>
+    bn = import_optional_dependency("bottleneck", errors="warn")
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\pandas\compat\_optional.py", line 158, in import_optional_dependency
+    module = importlib.import_module(name)
+  File "C:\Users\wpbro\miniconda3\Lib\importlib\__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\bottleneck\__init__.py", line 7, in <module>
+    from .move import (move_argmax, move_argmin, move_max, move_mean, move_median,
+Traceback (most recent call last):
+  File "C:\Users\wpbro\miniconda3\Lib\site-packages\numpy\core\_multiarray_umath.py", line 44, in __getattr__
+    raise ImportError(msg)
+ImportError: 
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.2.6 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 36, in <module>
+    from dotenv import load_dotenv, find_dotenv
+ModuleNotFoundError: No module named 'dotenv'
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+GCS unavailable — proceeding without distributed lock.
+Account equity: $100,167.61
+[XLE] regime=9 (of 13)  bias=0.0371  direction=long  wf_sharpe=-0.651  kelly_f=0.0000
+[XLB] regime=1 (of 2)  bias=0.0270  direction=long  wf_sharpe=-0.063  kelly_f=0.0000
+[XOP] regime=3 (of 9)  bias=-0.0793  direction=short  wf_sharpe=-1.774  kelly_f=0.0000
+
+-- Reconciling flat assets --
+  XLB: signal flat — closing short position.
+  Closed existing XLB position.
+  XOP: signal flat — closing short position.
+  Closed existing XOP position.
+
+-- Placing orders --
+No actionable signals — staying flat.
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+GCS unavailable — proceeding without distributed lock.
+Account equity: $100,166.45
+[XLE] regime=9 (of 13)  bias=0.0371  direction=long  wf_sharpe=-0.651  kelly_f=0.0000
+[XLB] regime=1 (of 2)  bias=0.0270  direction=long  wf_sharpe=-0.063  kelly_f=0.0000
+[XOP] regime=3 (of 9)  bias=-0.0793  direction=short  wf_sharpe=-1.774  kelly_f=0.0000
+
+-- Reconciling flat assets --
+
+-- Placing orders --
+No actionable signals — staying flat.
