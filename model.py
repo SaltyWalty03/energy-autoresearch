@@ -94,6 +94,14 @@ class DirectionModel(BaseEstimator, RegressorMixin):
             ])
         return np.array(feats)
 
+    def _wti_lag_ret(self, idx: pd.DatetimeIndex) -> np.ndarray:
+        """WTI lagged log-return aligned to idx (continuous cross-asset signal)."""
+        prices = _load_commodity(self.commodity_ticker)
+        if len(prices) == 0:
+            return np.zeros(len(idx))
+        ret = np.log(prices.clip(lower=1e-8)).diff(1).shift(1)
+        return ret.reindex(idx, method="ffill").fillna(0.0).values
+
     def _commodity_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
         Returns a boolean array (len(idx)) that is True on days where
@@ -133,7 +141,11 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         weights = np.exp(np.linspace(-0.3, 0.0, n_full))[cutoff:]
 
         # ── Train ─────────────────────────────────────────────────────────────
-        F      = self._rolling_features(r, 0)
+        F        = self._rolling_features(r, 0)
+        wti_full = self._wti_lag_ret(X.index)
+        wti_win  = wti_full[cutoff:]
+        F        = np.column_stack([F, wti_win])
+
         labels = (y_w > 0).astype(int)
 
         self.scaler_ = StandardScaler()
@@ -166,6 +178,8 @@ class DirectionModel(BaseEstimator, RegressorMixin):
     def predict(self, X):
         r   = np.concatenate([self._tail, np.array(X).ravel()])
         F   = self._rolling_features(r, len(self._tail))
+        wti = self._wti_lag_ret(X.index)
+        F   = np.column_stack([F, wti])
         F_s = self.scaler_.transform(F)
         proba = self.clf_.predict_proba(F_s)[:, 1]
         signal = 2 * proba - 1
