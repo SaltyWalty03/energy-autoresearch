@@ -48,3 +48,26 @@
 2026-05-07 23:10:44.633827	Baseline	2.0526
 2026-05-07 23:11:32.754846	Baseline	0.4453
 2026-05-18 11:03:51.803511	post-cleanup smoke test	2.5903
+2026-05-18 17:45:47.880180	xgb-baseline	0.5408	-0.3981	0.4145
+2026-05-18 17:52:04.640988	xgb-depth2-n800	0.2908	-0.6807	0.7136
+2026-05-18 17:52:26.889863	rf-baseline-wf	2.5949	0.3226	0.8639
+2026-07-17 14:48:41.441020	cross-source-interactions: NatGas-zscore + Temp-anomaly + 8 interaction features	0.9016	0.1468	0.4242
+2026-07-17 14:49:46.334597	HistGradientBoostingClassifier max_iter=300 lr=0.05 max_depth=4	-1.0112	-0.2892	0.3265
+2026-07-17 14:50:45.753797	ExtraTreesClassifier n_estimators=500 max_features=0.5 max_depth=2	0.3095	-0.4157	0.6604
+2026-07-17 14:51:44.934162	fresh-wti: yfinance fallback when EIA cache older than 30 days	1.2428	0.0347	0.6218
+2026-09-14 16:39:44.445294	wti-continuous-feature: add WTI lagged log-return as 7th RF feature alongside binary shock filter	1.5453	0.3422	0.6381
+2026-09-14 16:40:33.678341	RobustScaler instead of StandardScaler: median/IQR scaling more robust to fat-tail energy shock days	1.2223	0.3442	0.9289
+2026-09-14 16:42:12.994990	add 10-day rolling mean and vol features: fills medium-term momentum gap between 5d and 20d windows	1.338	0.2445	0.5748
+2026-09-14 16:43:07.585787	tighten WTI shock filter: wti_thresh 0.02->0.015 zeros more moderate-shock days, filter-only change	1.162	0.4534	0.7324
+2026-09-14 16:49:53.086700	wti-continuous-feature: WTI lagged log-return as 7th RF feature (7 total); correct baseline is ~1.37 today	1.5453	0.3422	0.6381
+2026-09-14 16:51:37.080285	steeper-decay: apply linspace(-0.6,0) over training window directly (was -0.3 over full history, ~0.85-1.0 spread; now 0.55-1.0)	1.234	0.3605	0.692
+2026-09-14 16:53:32.027090	add abs(WTI_lag) as 8th feature: magnitude of WTI shock independent of direction; 8 features total	1.2197	0.4197	0.749
+2026-09-14 16:54:58.535786	max_features=4: RF considers 4/7 features per split (was sqrt~2) to allow WTI x momentum cross-feature interactions	0.9415	0.4809	0.5625
+2026-09-14 16:57:09.983490	ret_lag x Temp_Anomaly: 8th feature = ret_lag * Houston_30d_temp_anomaly interaction (program.md priority 1)	1.7869	0.268	0.6973
+2026-09-14 19:27:42.504026	add ret_lag x NatGas_zscore as 9th feature: storage tightness x momentum (program.md priority 2)	2.049	0.4806	0.956
+2026-09-14 19:28:31.149242	three-way interaction: ret_lag x Temp x NatGas_zscore as 10th feature (program.md priority 3)	1.9161	0.6185	0.9562
+2026-09-14 19:33:11.756110	Temp_Anomaly^2 x ret_lag as 10th feature: symmetric nonlinear demand stress (program.md priority 5)	0.9584	0.4605	0.7639
+2026-09-14 19:34:22.812309	sign(Temp_Anomaly) x NatGas_zscore as 10th feature: program.md priority 4 temp-direction x storage-level cross-source	1.9193	0.3767	1.1626
+2026-09-14 19:37:25.689728	ret_lag x WTI_lag_ret as 10th feature: momentum-agreement cross-asset interaction	1.9155	0.383	1.1045
+2026-09-14 19:38:42.393922	train_window 756->504: 2yr window drops 2022-23 whipsaw regime, focuses on post-2024 low-vol pattern	0.7817	0.3216	0.4506
+2026-09-14 19:39:27.802817	steepen exp decay -0.3->-0.6: stronger recency tilt within 3yr training window	1.8505	0.4718	0.7866
