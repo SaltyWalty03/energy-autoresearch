@@ -119,6 +119,28 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         anomaly = (temp - rolling_mean).shift(1)  # yesterday's anomaly
         return anomaly.reindex(idx, method="ffill").fillna(0.0).values
 
+    def _natgas_zscore(self, idx: pd.DatetimeIndex) -> np.ndarray:
+        """
+        NatGas storage 20-day rolling z-score (stationarised, lagged 1 period).
+        Uses the largest EIA gas-storage parquet (weekly, ffilled to daily).
+        Falls back to zeros if unavailable.
+        """
+        eia_dir = Path(__file__).parent / "data" / "eia_cache"
+        files = sorted(eia_dir.glob("eia_gas_storage_*.parquet"),
+                       key=lambda f: f.stat().st_size, reverse=True)
+        if not files:
+            return np.zeros(len(idx))
+        df = pd.read_parquet(files[0])
+        storage = df.set_index("date")["value"]
+        storage.index = pd.to_datetime(storage.index)
+        storage = storage.sort_index()
+        # Forward-fill weekly EIA releases to daily, then z-score
+        storage_daily = storage.reindex(idx, method="ffill")
+        roll_mean = storage_daily.rolling(20, min_periods=10).mean()
+        roll_std  = storage_daily.rolling(20, min_periods=10).std() + 1e-8
+        zscore = ((storage_daily - roll_mean) / roll_std).shift(1)
+        return zscore.fillna(0.0).values
+
     def _commodity_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
         Returns a boolean array (len(idx)) that is True on days where
@@ -161,11 +183,15 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         F        = self._rolling_features(r, 0)
         wti_full = self._wti_lag_ret(X.index)
         wti_win  = wti_full[cutoff:]
-        # ret_lag × Temp_Anomaly interaction (program.md priority #1)
+        # ret_lag × Temp_Anomaly (program.md priority #1)
         temp_full = self._temp_anomaly(X.index)
         temp_win  = temp_full[cutoff:]
-        interaction = r * temp_win
-        F        = np.column_stack([F, wti_win, interaction])
+        interact_temp = r * temp_win
+        # ret_lag × NatGas_Storage_zscore (program.md priority #2)
+        ng_full = self._natgas_zscore(X.index)
+        ng_win  = ng_full[cutoff:]
+        interact_ng = r * ng_win
+        F        = np.column_stack([F, wti_win, interact_temp, interact_ng])
 
         labels = (y_w > 0).astype(int)
 
@@ -197,13 +223,13 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         return self
 
     def predict(self, X):
-        r   = np.concatenate([self._tail, np.array(X).ravel()])
-        F   = self._rolling_features(r, len(self._tail))
-        wti  = self._wti_lag_ret(X.index)
-        temp = self._temp_anomaly(X.index)
+        r     = np.concatenate([self._tail, np.array(X).ravel()])
+        F     = self._rolling_features(r, len(self._tail))
         r_val = r[len(self._tail):]
-        interaction = r_val * temp
-        F   = np.column_stack([F, wti, interaction])
+        wti   = self._wti_lag_ret(X.index)
+        temp  = self._temp_anomaly(X.index)
+        ng    = self._natgas_zscore(X.index)
+        F     = np.column_stack([F, wti, r_val * temp, r_val * ng])
         F_s = self.scaler_.transform(F)
         proba = self.clf_.predict_proba(F_s)[:, 1]
         signal = 2 * proba - 1
