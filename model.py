@@ -102,6 +102,23 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         ret = np.log(prices.clip(lower=1e-8)).diff(1).shift(1)
         return ret.reindex(idx, method="ffill").fillna(0.0).values
 
+    def _temp_anomaly(self, idx: pd.DatetimeIndex) -> np.ndarray:
+        """
+        Yesterday's Houston temperature anomaly (temp - 30d rolling mean), shifted 1d.
+        Uses the largest cached OpenMeteo Houston parquet; falls back to zeros.
+        """
+        cache_dir = Path(__file__).parent / "data" / "openmeteo_cache"
+        files = sorted(cache_dir.glob("openmeteo_houston_*.parquet"),
+                       key=lambda f: f.stat().st_size, reverse=True)
+        if not files:
+            return np.zeros(len(idx))
+        df = pd.read_parquet(files[0])
+        df["date"] = pd.to_datetime(df["date"])
+        temp = df.sort_values("date").set_index("date")["temperature_2m_mean"]
+        rolling_mean = temp.rolling(30, min_periods=15).mean()
+        anomaly = (temp - rolling_mean).shift(1)  # yesterday's anomaly
+        return anomaly.reindex(idx, method="ffill").fillna(0.0).values
+
     def _commodity_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
         Returns a boolean array (len(idx)) that is True on days where
@@ -144,7 +161,11 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         F        = self._rolling_features(r, 0)
         wti_full = self._wti_lag_ret(X.index)
         wti_win  = wti_full[cutoff:]
-        F        = np.column_stack([F, wti_win])
+        # ret_lag × Temp_Anomaly interaction (program.md priority #1)
+        temp_full = self._temp_anomaly(X.index)
+        temp_win  = temp_full[cutoff:]
+        interaction = r * temp_win
+        F        = np.column_stack([F, wti_win, interaction])
 
         labels = (y_w > 0).astype(int)
 
@@ -178,8 +199,11 @@ class DirectionModel(BaseEstimator, RegressorMixin):
     def predict(self, X):
         r   = np.concatenate([self._tail, np.array(X).ravel()])
         F   = self._rolling_features(r, len(self._tail))
-        wti = self._wti_lag_ret(X.index)
-        F   = np.column_stack([F, wti])
+        wti  = self._wti_lag_ret(X.index)
+        temp = self._temp_anomaly(X.index)
+        r_val = r[len(self._tail):]
+        interaction = r_val * temp
+        F   = np.column_stack([F, wti, interaction])
         F_s = self.scaler_.transform(F)
         proba = self.clf_.predict_proba(F_s)[:, 1]
         signal = 2 * proba - 1
