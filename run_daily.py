@@ -1,21 +1,31 @@
 """
-run_daily.py — Multi-asset local paper-trading signal via Alpaca.
+run_daily.py — Multi-asset paper-trading signal; Cloud Functions HTTP entry point.
 
-Loads per-asset regime models from models/, classifies today's market regime
-for each asset, then uses the regime-specific DirectionModel and its
-walk-forward Sharpe to size a half-Kelly position.
+Deploy with:
+    gcloud functions deploy run_daily \
+        --runtime python311 --trigger-http \
+        --entry-point run_daily --region us-central1 \
+        --set-env-vars ALPACA_API_KEY=...,ALPACA_SECRET_KEY=...
 
 Two-layer inference:
   Layer 1 — Regime: classify_regime() → k (or -1 → fall back to full model)
   Layer 2 — Signal: regime-k DirectionModel predicts directional bias
 
-Kelly formula (half-Kelly, annualised-to-daily):
-    kelly_f = max(0, (wf_sharpe_mean / sqrt(252)) * 0.5)
-    dollar_alloc = kelly_f * equity
-Total gross exposure capped at 95% of equity across all assets.
+Position sizing — equal-weight allocation:
+    per_position_notional = MAX_PORTFOLIO_EXPOSURE_PCT * equity / num_active_signals
+    safe_notional         = min(per_position_notional, alpaca_buying_power)
+    shares                = int(safe_notional / price)
+Kelly is retained as an edge gate only: wf_sharpe ≤ 0 → skip asset, not size it.
 
-Usage:
-    python run_daily.py
+Position reconciliation:
+  - Signal matches current direction → hold (no order placed)
+  - Signal flat → close any open position
+  - Signal differs from current → close then open new direction
+
+Environment variables:
+    ALPACA_API_KEY      — required
+    ALPACA_SECRET_KEY   — required
+    DRY_RUN             — set to "true" to run signal generation without placing orders
 """
 import json
 import math
@@ -27,7 +37,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from dotenv import load_dotenv, find_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -40,19 +49,17 @@ try:
 except ImportError:
     _GCS_AVAILABLE = False
 
-load_dotenv(find_dotenv())
-
 HERE = Path(__file__).parent
 MODELS_DIR = HERE / "models"
 GCS_BUCKET = "energy-autoresearch-model"
 LOCK_OBJECT = "trade_lock.json"
 LOCK_TTL_SECONDS = 90
-MAX_EXPOSURE = 0.95
-MAX_SHARES_PER_ASSET = 100
-MODEL_THRESH = 0.05
+MAX_PORTFOLIO_EXPOSURE_PCT = 0.80   # fraction of equity deployed across all concurrent positions
+MODEL_THRESH = 0.02
 
 from src.universe import ASSETS
 from src.regime import classify_regime
+from src.trade_logger import log_trade
 from model import build_feature_matrix
 
 
@@ -175,6 +182,11 @@ def _get_signal_and_meta(
         signal = float(full_model.predict(ret_lag_frame)[-1])
         return signal, full_meta, k
 
+    if regime_metas[k].get("wf_sharpe_mean", 0.0) <= 0:
+        print(f"  Regime-{k} wf_sharpe={regime_metas[k]['wf_sharpe_mean']:.3f} ≤ 0 — using full model fallback.")
+        signal = float(full_model.predict(ret_lag_frame)[-1])
+        return signal, full_meta, k
+
     r_model = _load_pkl(r_model_path)
     signal  = float(r_model.predict(ret_lag_frame)[-1])
     return signal, regime_metas[k], k
@@ -189,15 +201,62 @@ def _get_price(data_client: StockHistoricalDataClient, ticker: str) -> float:
     return float(quote[ticker].ask_price)
 
 
-# ── Kelly sizing ───────────────────────────────────────────────────────────────
+# ── Kelly edge guard ──────────────────────────────────────────────────────────
 
 def _kelly_fraction(wf_sharpe_mean: float) -> float:
+    """Skip gate only — returns 0 when the model has no validated edge (wf_sharpe ≤ 0).
+    No longer used for dollar sizing; see _compute_position_size."""
     if wf_sharpe_mean <= 0:
         return 0.0
     return (wf_sharpe_mean / math.sqrt(252)) * 0.5
 
 
-# ── Order placement ────────────────────────────────────────────────────────────
+# ── Position sizing (swap body here to change weighting scheme) ────────────────
+
+def _compute_position_size(
+    equity: float,
+    price: float,
+    num_positions: int,
+    buying_power: float,
+    *,
+    max_exposure: float = MAX_PORTFOLIO_EXPOSURE_PCT,
+) -> int:
+    """
+    Equal-weight allocation across num_positions concurrent positions.
+
+    Formula
+    -------
+        per_position_notional = max_exposure * equity / num_positions
+        safe_notional         = min(per_position_notional, buying_power)
+        shares                = int(safe_notional / price)
+
+    The buying_power clamp enforces the 80 % cap in real time against Alpaca's
+    live account state, not just at signal-generation time.
+
+    To swap to inverse-volatility weighting later, replace this function body
+    while keeping the signature unchanged — order-execution code is untouched.
+    """
+    if num_positions <= 0 or price <= 0:
+        return 0
+    raw_notional  = max_exposure * equity / num_positions
+    safe_notional = min(raw_notional, max(0.0, buying_power))
+    return int(safe_notional / price)
+
+
+# ── Position management ────────────────────────────────────────────────────────
+
+def _current_position(client: TradingClient, ticker: str) -> tuple[str, int]:
+    try:
+        pos = client.get_open_position(ticker)
+        qty = int(pos.qty)
+        if qty > 0:
+            return "long", qty
+        elif qty < 0:
+            return "short", abs(qty)
+    except Exception:
+        pass
+    return "flat", 0
+
 
 def _close_position(client: TradingClient, ticker: str):
     try:
@@ -216,78 +275,154 @@ def _place_order(client: TradingClient, ticker: str, shares: int, signal: float,
     print(f"  [{side.value.upper()}] {shares} shares {ticker} @ ~${price:.2f}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+# ── Cloud Functions HTTP entry point ──────────────────────────────────────────
 
-if __name__ == "__main__":
+def run_daily(request):
+    """
+    HTTP entry point for Google Cloud Functions.
+    `request` is a Flask Request object (ignored — all config comes from env vars).
+    Returns a (body, status_code) tuple per Cloud Functions HTTP convention.
+    """
+    dry_run    = os.environ.get("DRY_RUN") == "true"
     api_key    = os.environ["ALPACA_API_KEY"]
     secret_key = os.environ["ALPACA_SECRET_KEY"]
 
-    trade_client = TradingClient(api_key, secret_key, paper=True)
-    data_client  = StockHistoricalDataClient(api_key, secret_key)
-    gcs          = _gcs_client()
+    if not dry_run:
+        trade_client = TradingClient(api_key, secret_key, paper=True)
+        data_client  = StockHistoricalDataClient(api_key, secret_key)
+        gcs          = _gcs_client()
 
-    if not _acquire_lock(gcs, owner="run_daily"):
-        raise SystemExit("Could not acquire trade lock — another process is trading.")
+        if not _acquire_lock(gcs, owner="run_daily"):
+            for ticker in ASSETS:
+                log_trade(asset=ticker, regime=-1, n_regimes=0, signal=0.0,
+                          kelly_fraction=0.0, action="flat", fill_price=0.0,
+                          shares=0, account_equity=0.0)
+            return ("Lock held, skipped run", 200)
+    else:
+        trade_client = data_client = gcs = None
 
     try:
-        equity = float(trade_client.get_account().equity)
-        print(f"Account equity: ${equity:,.2f}")
+        if not dry_run:
+            equity = float(trade_client.get_account().equity)
+            print(f"Account equity: ${equity:,.2f}")
+        else:
+            equity = 0.0
 
-        plan = []  # (ticker, signal, shares_raw, price, kelly_f)
+        # plan entries: (ticker, signal, price, kelly_f, regime_k, n_regimes)
+        plan = []
 
         for ticker in ASSETS:
-            print(f"\n[{ticker}]")
             full_model, full_meta, regime_model, regime_metas = _load_regime_stack(ticker)
             feat_vec, ret_lag_frame = _today_feature_vector(ticker)
+            n_regimes = regime_model.n_regimes if regime_model else 0
 
             signal, meta_used, regime_k = _get_signal_and_meta(
                 ticker, full_model, full_meta, regime_model, regime_metas,
                 feat_vec, ret_lag_frame,
             )
-            regime_label = f"regime {regime_k}" if regime_k >= 0 else "full model"
-            n_regimes    = regime_model.n_regimes if regime_model else 0
-            print(f"  {regime_label} (of {n_regimes})  signal={signal:.4f}  "
-                  f"WF-Sharpe={meta_used['wf_sharpe_mean']:.4f}")
+            wf_sharpe = meta_used["wf_sharpe_mean"]
+            direction = "long" if signal > MODEL_THRESH else (
+                "short" if signal < -MODEL_THRESH else "flat"
+            )
+            kelly_f = _kelly_fraction(wf_sharpe)
 
-            if abs(signal) < MODEL_THRESH:
-                print("  Signal in flat zone — skipping.")
+            print(f"[{ticker}] regime={regime_k} (of {n_regimes})  bias={signal:.4f}  "
+                  f"direction={direction}  wf_sharpe={wf_sharpe:.3f}  kelly_f={kelly_f:.4f}")
+
+            if dry_run:
                 continue
 
-            kelly_f = _kelly_fraction(meta_used["wf_sharpe_mean"])
+            if abs(signal) < MODEL_THRESH:
+                log_trade(asset=ticker, regime=regime_k, n_regimes=n_regimes,
+                          signal=round(signal, 4), kelly_fraction=0.0,
+                          action="flat", fill_price=0.0, shares=0,
+                          account_equity=round(equity, 2))
+                continue
+
             if kelly_f == 0.0:
-                print("  WF-Sharpe <= 0 — no edge, skipping.")
+                log_trade(asset=ticker, regime=regime_k, n_regimes=n_regimes,
+                          signal=round(signal, 4), kelly_fraction=0.0,
+                          action="flat", fill_price=0.0, shares=0,
+                          account_equity=round(equity, 2))
                 continue
 
             price = _get_price(data_client, ticker)
-            dollar_alloc = kelly_f * equity
-            shares_raw   = int(dollar_alloc / price)
-            plan.append((ticker, signal, shares_raw, price, kelly_f))
-            print(f"  kelly_f={kelly_f:.4f}  alloc=${dollar_alloc:,.0f}  raw_shares={shares_raw}")
+            plan.append((ticker, signal, price, kelly_f, regime_k, n_regimes))
 
-        # ── Cap total gross exposure ───────────────────────────────────────────
-        scale = 1.0
-        if plan:
-            total_alloc = sum(s * p for _, _, s, p, _ in plan)
-            max_alloc   = MAX_EXPOSURE * equity
-            scale = min(1.0, max_alloc / total_alloc) if total_alloc > 0 else 1.0
-            if scale < 1.0:
-                print(f"\nScaling by {scale:.3f} (alloc ${total_alloc:,.0f} > cap ${max_alloc:,.0f})")
+        if dry_run:
+            return ("Dry run complete — no orders placed", 200)
 
-        # ── Close then open ────────────────────────────────────────────────────
-        print("\n-- Closing existing positions --")
+        # ── Real-time buying-power check ───────────────────────────────────────
+        num_positions = len(plan)
+        buying_power  = float(trade_client.get_account().buying_power)
+        cap_notional  = MAX_PORTFOLIO_EXPOSURE_PCT * equity
+        print(f"\nActive signals: {num_positions}  |  Equity: ${equity:,.2f}  |  "
+              f"Buying power: ${buying_power:,.2f}  |  "
+              f"Target deployment: ${cap_notional:,.2f} ({MAX_PORTFOLIO_EXPOSURE_PCT:.0%})")
+
+        plan_tickers = {t for t, *_ in plan}
+
+        # ── Close flat-signal assets that still have open positions ───────────
+        print("\n-- Reconciling flat assets --")
         for ticker in ASSETS:
-            _close_position(trade_client, ticker)
+            if ticker not in plan_tickers:
+                current_dir, current_qty = _current_position(trade_client, ticker)
+                if current_dir != "flat":
+                    print(f"  {ticker}: signal flat — closing {current_dir} position.")
+                    _close_position(trade_client, ticker)
+                    log_trade(asset=ticker, regime=-1, n_regimes=0,
+                              signal=0.0, kelly_fraction=0.0, action="close",
+                              fill_price=0.0, shares=current_qty,
+                              account_equity=round(equity, 2))
 
+        # ── Place, hold, or flip per-plan assets ──────────────────────────────
         print("\n-- Placing orders --")
-        for ticker, signal, shares_raw, price, kelly_f in plan:
-            shares = min(int(shares_raw * scale), MAX_SHARES_PER_ASSET)
+        for ticker, signal, price, kelly_f, regime_k, n_regimes in plan:
+            current_dir, current_qty = _current_position(trade_client, ticker)
+            signal_dir = "long" if signal > 0 else "short"
+            shares = _compute_position_size(equity, price, num_positions, buying_power)
+
+            if current_dir == signal_dir:
+                print(f"  {ticker}: already {current_dir} — holding.")
+                log_trade(asset=ticker, regime=regime_k, n_regimes=n_regimes,
+                          signal=round(signal, 4), kelly_fraction=round(kelly_f, 4),
+                          action="hold", signal_price=round(price, 2), fill_price=round(price, 2), shares=current_qty,
+                          account_equity=round(equity, 2))
+                continue
+
+            if current_dir != "flat":
+                _close_position(trade_client, ticker)
+
             if shares < 1:
                 print(f"  {ticker}: scaled to <1 share — skipping.")
+                log_trade(asset=ticker, regime=regime_k, n_regimes=n_regimes,
+                          signal=round(signal, 4), kelly_fraction=round(kelly_f, 4),
+                          action="flat", signal_price=round(price, 2), fill_price=round(price, 2), shares=0,
+                          account_equity=round(equity, 2))
                 continue
+
             _place_order(trade_client, ticker, shares, signal, price)
+            action = "buy" if signal > 0 else "sell"
+            log_trade(asset=ticker, regime=regime_k, n_regimes=n_regimes,
+                      signal=round(signal, 4), kelly_fraction=round(kelly_f, 4),
+                      action=action, signal_price=round(price, 2), fill_price=round(price, 2), shares=shares,
+                      account_equity=round(equity, 2))
 
         if not plan:
             print("No actionable signals — staying flat.")
 
+        return ("Run completed", 200)
+
+    except Exception as exc:
+        print(f"run_daily error: {exc}")
+        return (f"Error: {exc}", 500)
+
     finally:
-        _release_lock(gcs)
+        if not dry_run:
+            _release_lock(gcs)
+
+
+# ── Local testing shim ─────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    run_daily(None)

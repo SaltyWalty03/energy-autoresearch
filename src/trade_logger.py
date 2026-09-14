@@ -5,7 +5,12 @@ log_trade(**kwargs) appends one row to trades_log.csv at the project root.
 Creates the file with headers if it does not exist.
 
 Columns: timestamp, asset, regime, n_regimes, signal, kelly_fraction,
-         action, fill_price, shares, account_equity
+         action, signal_price, fill_price, shares, account_equity
+
+signal_price — ask price queried at signal time (expected execution price).
+               Set for buy/sell/hold actions; 0.0 for flat/close.
+fill_price   — kept for backward compatibility (same value as signal_price
+               for rows written by this version; older rows only have fill_price).
 """
 import csv
 from datetime import datetime, timezone
@@ -14,7 +19,7 @@ from pathlib import Path
 _LOG_PATH = Path(__file__).parent.parent / "trades_log.csv"
 _COLUMNS  = [
     "timestamp", "asset", "regime", "n_regimes", "signal",
-    "kelly_fraction", "action", "fill_price", "shares", "account_equity",
+    "kelly_fraction", "action", "signal_price", "fill_price", "shares", "account_equity",
 ]
 
 
