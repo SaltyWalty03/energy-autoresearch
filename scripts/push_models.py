@@ -35,7 +35,8 @@ from pathlib import Path
 ROOT        = Path(__file__).resolve().parent.parent
 MODELS_DIR  = ROOT / "models"
 DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "energy-autoresearch-model")
-POINTER_OBJ = "models/pointer.json"
+POINTER_OBJ    = "models/pointer.json"
+MANIFEST_FILE  = MODELS_DIR / "manifest.json"
 # Matches only versioned prefixes like models/20261024_143022/ — never flat models/*.
 _VERSIONED_RE = re.compile(r'^models/\d{8}_\d{6}/$')
 
@@ -50,17 +51,43 @@ def _gcs_md5_hex(blob) -> str:
 
 
 def _list_versioned_prefixes(bucket) -> list[str]:
-    """Return all models/<timestamp>/ prefixes, sorted oldest-first."""
-    blobs = list(bucket.list_blobs(prefix="models/", delimiter="/"))
-    # list_blobs with delimiter populates bucket.list_blobs(...).prefixes
-    # Re-call to get prefixes
+    """Return all models/<timestamp>/ prefixes, sorted oldest-first.
+
+    Uses delimiter="/" so GCS returns virtual-directory prefixes separately from
+    flat blob names.  Only prefixes matching _VERSIONED_RE are returned, which
+    guarantees flat models/*.pkl / models/*.json are never selected for deletion.
+    """
     iterator = bucket.client.list_blobs(bucket, prefix="models/", delimiter="/")
-    _ = list(iterator)  # exhaust so .pages populates prefixes
-    prefixes = []
+    prefixes: list[str] = []
     for page in iterator.pages:
         prefixes.extend(page.prefixes)
-    # Accept only models/YYYYMMDD_HHMMSS/ — never flat models/*.pkl or models/*.json.
     return sorted(p for p in prefixes if _VERSIONED_RE.match(p))
+
+
+def _load_manifest() -> list[Path]:
+    """Return the list of local model files to push, as written by train_all.py.
+
+    Aborts if manifest.json is missing (stale models/ dir) or if any listed
+    file is not present on disk.
+    """
+    if not MANIFEST_FILE.exists():
+        raise FileNotFoundError(
+            f"{MANIFEST_FILE} not found — run train_all.py first.\n"
+            "manifest.json lists exactly the artifacts produced by the last training "
+            "run so that stale files from previous runs are never pushed to GCS."
+        )
+    manifest = json.loads(MANIFEST_FILE.read_text())
+    listed   = manifest.get("files", [])
+    paths    = [MODELS_DIR / f for f in listed]
+    missing  = [p for p in paths if not p.exists()]
+    if missing:
+        names = ", ".join(p.name for p in missing[:5])
+        raise FileNotFoundError(
+            f"manifest.json references {len(missing)} missing file(s): {names}"
+            + (" ..." if len(missing) > 5 else "")
+        )
+    # Include manifest.json itself so GCS carries a record of what was trained.
+    return [MANIFEST_FILE] + paths
 
 
 def main(dry_run: bool, bucket_name: str, keep: int) -> None:
@@ -71,17 +98,15 @@ def main(dry_run: bool, bucket_name: str, keep: int) -> None:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     prefix    = f"models/{timestamp}/"
 
-    files = sorted(MODELS_DIR.rglob("*"))
-    uploaded = skipped = 0
+    files    = _load_manifest()
+    uploaded = 0
 
     print(f"Target prefix: gs://{bucket_name}/{prefix}")
+    print(f"Manifest: {len(files) - 1} model files + manifest.json = {len(files)} total")
     for local_path in files:
-        if not local_path.is_file():
-            continue
-        rel      = local_path.relative_to(MODELS_DIR)
-        gcs_key  = prefix + rel.as_posix()
-        blob     = bucket.blob(gcs_key)
-        local_md5 = _local_md5_hex(local_path)
+        rel     = local_path.relative_to(MODELS_DIR)
+        gcs_key = prefix + rel.as_posix()
+        blob    = bucket.blob(gcs_key)
 
         if not dry_run:
             blob.upload_from_filename(str(local_path))

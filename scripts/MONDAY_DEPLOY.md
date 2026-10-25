@@ -57,34 +57,36 @@ training cycle.
 
 ---
 
-## e. Clean stale model files before push
+## e. Verify manifest before push
 
-Previous XLE training left regime3–12 on disk (20 stale files). The current model has 3
-regimes (0–2); `_load_regime_stack` only loads those 3, but GCS should not hold orphans.
+`train_all.py` writes `models/manifest.json` listing every artifact it produced.
+`push_models.py` reads this manifest and uploads exactly those files — stale artifacts
+from previous training runs are never pushed regardless of what else is in `models/`.
 
 ```bash
-rm models/XLE_regime{3,4,5,6,7,8,9,10,11,12}_model.pkl
-rm models/XLE_regime{3,4,5,6,7,8,9,10,11,12}_meta.json
-ls models/ | wc -l                  # must print 65
+python -c "import json; m=json.load(open('models/manifest.json')); print(m['file_count'], 'files,', m['trained_at'])"
 ```
+
+Expected output: `65 files, 2026-10-24T...` (XLE 9 + XLB 25 + XOP 31).
+If `manifest.json` is missing, re-run `python train_all.py` first.
 
 Active file count breakdown:
 - XLE:  3 regimes → 3×2 + model + meta + regime.pkl = **9 files**
 - XLB: 11 regimes → 11×2 + model + meta + regime.pkl = **25 files**
 - XOP: 14 regimes → 14×2 + model + meta + regime.pkl = **31 files**
-- **Total: 65 files**
+- **Total: 65 files** (plus manifest.json = 66 pushed to GCS)
 
 ---
 
 ## f. Push models to GCS
 
 ```bash
-python scripts/push_models.py --dry-run              # preview; confirm 65 files shown
+python scripts/push_models.py --dry-run              # preview; confirm 66 files shown (65 + manifest)
 python scripts/push_models.py --keep 3               # publish; writes pointer.json
 ```
 
 Verify output:
-- "65 file(s) uploaded."
+- "66 file(s) would be uploaded." (dry-run) / "66 file(s) uploaded." (live)
 - "Pointer updated: models/pointer.json → models/YYYYMMDD_HHMMSS/"
 - Orphan cleanup log (keeps 3 most recent versioned prefixes; never deletes flat models/).
 

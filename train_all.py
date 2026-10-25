@@ -20,6 +20,7 @@ import copy
 import json
 import pickle
 import warnings
+from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -139,6 +140,29 @@ def _save_json(path: Path, data: dict):
     path.write_text(json.dumps(data, indent=2))
 
 
+def _write_manifest(results: list[dict]) -> None:
+    """Write models/manifest.json listing every artifact produced this run.
+
+    push_models.py reads this file and uploads exactly these files, so stale
+    artifacts left over from previous training runs are never pushed to GCS.
+    """
+    files: list[str] = []
+    for r in results:
+        ticker = r["ticker"]
+        files += [f"{ticker}_model.pkl", f"{ticker}_meta.json", f"{ticker}_regime.pkl"]
+        for k in range(r["n_regimes"]):
+            files += [f"{ticker}_regime{k}_model.pkl", f"{ticker}_regime{k}_meta.json"]
+    files = sorted(files)
+    manifest = {
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "file_count": len(files),
+        "files": files,
+    }
+    manifest_path = MODELS_DIR / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    print(f"\nManifest written: models/manifest.json ({len(files)} files)")
+
+
 if __name__ == "__main__":
     all_results = []
     for ticker, cfg in ASSETS.items():
@@ -155,3 +179,5 @@ if __name__ == "__main__":
         print(f"{r['ticker']:<6} {r['wf_sharpe_mean']:>9.4f} {r['wf_sharpe_std']:>8.4f}"
               f" {r['n_regimes']:>8}  {regime_str}")
     print("=" * 70)
+
+    _write_manifest(all_results)
