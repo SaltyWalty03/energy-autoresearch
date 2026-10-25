@@ -1,8 +1,0 @@
-{
-  "ticker": "XOP",
-  "regime": 1,
-  "n_rows": 224,
-  "wf_sharpe_mean": 2.729,
-  "wf_sharpe_std": 1.6411,
-  "fallback": false
-}
