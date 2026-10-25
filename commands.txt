@@ -1,0 +1,75 @@
+# XLE Trading System — Command Reference
+
+## Local Trading
+
+| Command | Description |
+|---|---|
+| python train_model.py | Train model on historical XLE data and save model.pkl locally |
+| python run_daily.py | Generate today's signal and place a paper order manually |
+| python test_alpaca.py | Verify Alpaca API keys are loaded and connection is working |
+
+---
+
+## Model Updates
+
+# Upload a newly trained model to GCS
+gsutil cp model.pkl gs://energy-autoresearch-model/model.pkl
+
+# Redeploy the cloud function after changes to main.py or model.py
+gcloud functions deploy run_daily --runtime python311 --trigger-http --entry-point run_daily --region us-central1 --memory 512MB --timeout 120s --allow-unauthenticated
+
+---
+
+## Monitoring
+
+# View last 20 log lines
+gcloud functions logs read run_daily --region us-central1 --limit 20
+
+# Manually trigger the cloud function once
+gcloud functions call run_daily --region us-central1
+
+# List all deployed cloud functions
+gcloud functions list
+
+# Check scheduler status and next run time
+gcloud scheduler jobs list --location us-central1
+
+---
+
+## Scheduler Control
+
+# Pause automated trading
+gcloud scheduler jobs pause run-daily-signal --location us-central1
+
+# Resume automated trading
+gcloud scheduler jobs resume run-daily-signal --location us-central1
+
+# Force the scheduler to fire immediately
+gcloud scheduler jobs run run-daily-signal --location us-central1
+
+---
+
+## Secrets & Storage
+
+# Rotate a secret (e.g. new Alpaca API key)
+echo -n "newvalue" | gcloud secrets versions add SECRET_NAME --data-file=-
+
+# List files in GCS bucket
+gsutil ls gs://energy-autoresearch-model/
+
+---
+
+## Daily Checklist
+
+- Check Alpaca at app.alpaca.markets for new orders after 9:05 AM ET
+- Check cloud function logs if no order appears
+- After 20 trading days, run model health check (rolling Sharpe, win rate)
+- Every Friday, retrain model and upload fresh model.pkl to GCS
+
+---
+
+## Key URLs
+
+- Alpaca paper dashboard: https://app.alpaca.markets
+- Google Cloud console: https://console.cloud.google.com
+- Cloud function URL: https://us-central1-energy-autoresearch.cloudfunctions.net/run_daily

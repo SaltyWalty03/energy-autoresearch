@@ -1,4 +1,7 @@
+import logging
+import os
 import time
+import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -14,6 +17,14 @@ except ImportError:
     _XGB_AVAILABLE = False
 
 _CACHE_DIR = Path(__file__).parent / "data" / "model_cache"
+
+log = logging.getLogger(__name__)
+
+# Rolling momentum/vol features built by _rolling_features(). Pickles fitted
+# before the 2026-09-14 update use only these; newer fits append 3 more
+# (WTI lag return, ret_lag x Temp_Anomaly, ret_lag x NatGas z-score).
+N_BASE_FEATURES     = 6
+N_EXTENDED_FEATURES = 9
 
 
 def _load_commodity(ticker: str = "CL=F") -> pd.Series:
@@ -44,10 +55,21 @@ def _load_commodity(ticker: str = "CL=F") -> pd.Series:
         raw = yf.download(ticker, start="2019-01-01", auto_adjust=True, progress=False)
         if isinstance(raw.columns, pd.MultiIndex):
             raw.columns = raw.columns.get_level_values(0)
-        raw[["Close"]].rename(columns={"Close": "close"}).to_parquet(cache_file)
-        return raw["Close"]
-    except Exception:
+    except Exception as exc:
+        log.warning("_load_commodity(%s) download failed — commodity features/shock filter "
+                    "degrade to zeros/off: %s", ticker, exc)
         return pd.Series(dtype=float)
+    if raw.empty or "Close" not in raw:
+        log.warning("_load_commodity(%s): no data returned — commodity features/shock "
+                    "filter degrade to zeros/off.", ticker)
+        return pd.Series(dtype=float)
+    # Cache write is best-effort: a failure (e.g. no pyarrow) must not discard the data.
+    try:
+        raw[["Close"]].rename(columns={"Close": "close"}).to_parquet(cache_file)
+    except Exception as exc:
+        log.warning("_load_commodity(%s): cache write failed (%s) — continuing uncached.",
+                    ticker, exc)
+    return raw["Close"]
 
 
 class DirectionModel(BaseEstimator, RegressorMixin):
@@ -94,6 +116,106 @@ class DirectionModel(BaseEstimator, RegressorMixin):
             ])
         return np.array(feats)
 
+    def _wti_lag_ret(self, idx: pd.DatetimeIndex) -> np.ndarray:
+        """WTI lagged log-return aligned to idx (continuous cross-asset signal)."""
+        prices = _load_commodity(self.commodity_ticker)
+        if len(prices) == 0:
+            return np.zeros(len(idx))
+        ret = np.log(prices.clip(lower=1e-8)).diff(1).shift(1)
+        return ret.reindex(idx, method="ffill").fillna(0.0).values
+
+    def _temp_anomaly(self, idx: pd.DatetimeIndex) -> np.ndarray:
+        """
+        Yesterday's Houston temperature anomaly (temp - 30d rolling mean), shifted 1d.
+        Uses local parquet cache when available; falls back to live OpenMeteo API.
+        """
+        cache_dir = Path(__file__).parent / "data" / "openmeteo_cache"
+        files = sorted(cache_dir.glob("openmeteo_houston_*.parquet"),
+                       key=lambda f: f.stat().st_size, reverse=True)
+        if files:
+            df = pd.read_parquet(files[0])
+            df["date"] = pd.to_datetime(df["date"])
+            temp = df.sort_values("date").set_index("date")["temperature_2m_mean"]
+        else:
+            try:
+                start = (idx.min() - pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+                end = idx.max().strftime("%Y-%m-%d")
+                resp = requests.get(
+                    "https://archive-api.open-meteo.com/v1/archive",
+                    params={
+                        "latitude": 29.76, "longitude": -95.37,
+                        "timezone": "America/Chicago",
+                        "start_date": start, "end_date": end,
+                        "daily": "temperature_2m_mean",
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                daily = resp.json()["daily"]
+                temp = pd.Series(
+                    daily["temperature_2m_mean"],
+                    index=pd.to_datetime(daily["time"]),
+                    dtype=float,
+                )
+            except Exception as exc:
+                log.warning("OpenMeteo fetch failed — Temp_Anomaly set to 0: %s", exc)
+                return np.zeros(len(idx))
+        rolling_mean = temp.rolling(30, min_periods=15).mean()
+        anomaly = (temp - rolling_mean).shift(1)
+        return anomaly.reindex(idx, method="ffill").fillna(0.0).values
+
+    def _natgas_zscore(self, idx: pd.DatetimeIndex) -> np.ndarray:
+        """
+        NatGas storage 20-period rolling z-score (stationarised, lagged 1 period).
+        Uses local EIA parquet cache when available; falls back to live EIA API.
+        Requires EIA_API_KEY env var for live fetch.
+        """
+        eia_dir = Path(__file__).parent / "data" / "eia_cache"
+        files = sorted(eia_dir.glob("eia_gas_storage_*.parquet"),
+                       key=lambda f: f.stat().st_size, reverse=True)
+        if files:
+            df = pd.read_parquet(files[0])
+            storage = df.set_index("date")["value"]
+            storage.index = pd.to_datetime(storage.index)
+            storage = storage.sort_index()
+        else:
+            api_key = os.environ.get("EIA_API_KEY", "")
+            if not api_key:
+                log.warning("EIA_API_KEY not set and no local cache — NatGas z-score set to 0.")
+                return np.zeros(len(idx))
+            try:
+                start = (idx.min() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
+                end = idx.max().strftime("%Y-%m-%d")
+                resp = requests.get(
+                    "https://api.eia.gov/v2/natural-gas/stor/wkly/data/",
+                    params={
+                        "api_key": api_key,
+                        "data[]": "value",
+                        "frequency": "weekly",
+                        "start": start, "end": end,
+                        "facets[series][]": "NW2_EPG0_SWO_R48_BCF",
+                        "sort[0][column]": "period",
+                        "sort[0][direction]": "asc",
+                        "length": 200,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                records = resp.json()["response"]["data"]
+                df = pd.DataFrame(records)
+                storage = pd.to_numeric(df["value"], errors="coerce")
+                storage.index = pd.to_datetime(df["period"])
+                storage = storage.sort_index().dropna()
+            except Exception as exc:
+                log.warning("EIA NatGas fetch failed — NatGas z-score set to 0: %s", exc)
+                return np.zeros(len(idx))
+        # Forward-fill weekly EIA releases to daily, then z-score
+        storage_daily = storage.reindex(idx, method="ffill")
+        roll_mean = storage_daily.rolling(20, min_periods=10).mean()
+        roll_std  = storage_daily.rolling(20, min_periods=10).std() + 1e-8
+        zscore = ((storage_daily - roll_mean) / roll_std).shift(1)
+        return zscore.fillna(0.0).values
+
     def _commodity_shock_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
         Returns a boolean array (len(idx)) that is True on days where
@@ -133,7 +255,19 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         weights = np.exp(np.linspace(-0.3, 0.0, n_full))[cutoff:]
 
         # ── Train ─────────────────────────────────────────────────────────────
-        F      = self._rolling_features(r, 0)
+        F        = self._rolling_features(r, 0)
+        wti_full = self._wti_lag_ret(X.index)
+        wti_win  = wti_full[cutoff:]
+        # ret_lag × Temp_Anomaly (program.md priority #1)
+        temp_full = self._temp_anomaly(X.index)
+        temp_win  = temp_full[cutoff:]
+        interact_temp = r * temp_win
+        # ret_lag × NatGas_Storage_zscore (program.md priority #2)
+        ng_full = self._natgas_zscore(X.index)
+        ng_win  = ng_full[cutoff:]
+        interact_ng = r * ng_win
+        F        = np.column_stack([F, wti_win, interact_temp, interact_ng])
+
         labels = (y_w > 0).astype(int)
 
         self.scaler_ = StandardScaler()
@@ -163,9 +297,28 @@ class DirectionModel(BaseEstimator, RegressorMixin):
         self.clf_.fit(F_s, labels, sample_weight=weights)
         return self
 
+    @property
+    def n_features_(self) -> int:
+        """Feature count this fitted model expects (6 = pre-2026-09-14 pickle, 9 = current)."""
+        return int(self.scaler_.n_features_in_)
+
     def predict(self, X):
-        r   = np.concatenate([self._tail, np.array(X).ravel()])
-        F   = self._rolling_features(r, len(self._tail))
+        r     = np.concatenate([self._tail, np.array(X).ravel()])
+        F     = self._rolling_features(r, len(self._tail))
+        # Build the feature set this pickle was fitted on. Older pickles were
+        # trained on the 6 base features; feeding them 9 raises in the scaler.
+        n_expected = self.n_features_
+        if n_expected == N_EXTENDED_FEATURES:
+            r_val = r[len(self._tail):]
+            wti   = self._wti_lag_ret(X.index)
+            temp  = self._temp_anomaly(X.index)
+            ng    = self._natgas_zscore(X.index)
+            F     = np.column_stack([F, wti, r_val * temp, r_val * ng])
+        elif n_expected != N_BASE_FEATURES:
+            raise ValueError(
+                f"DirectionModel fitted on {n_expected} features; predict() can only build "
+                f"{N_BASE_FEATURES} (legacy) or {N_EXTENDED_FEATURES} (extended). Retrain the model."
+            )
         F_s = self.scaler_.transform(F)
         proba = self.clf_.predict_proba(F_s)[:, 1]
         signal = 2 * proba - 1

@@ -1,11 +1,12 @@
 """
 run_daily.py — Multi-asset paper-trading signal; Cloud Functions HTTP entry point.
 
-Deploy with:
-    gcloud functions deploy run_daily \
-        --runtime python311 --trigger-http \
-        --entry-point run_daily --region us-central1 \
-        --set-env-vars ALPACA_API_KEY=...,ALPACA_SECRET_KEY=...
+Deploy:
+    python scripts/sync_cloud_function.py      # sync shared modules first
+    gcloud run deploy run-daily \
+        --source cloud_function/ --region us-central1 \
+        --set-secrets ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest
+    # Keys MUST come from Secret Manager — never pass via --set-env-vars.
 
 Two-layer inference:
   Layer 1 — Regime: classify_regime() → k (or -1 → fall back to full model)
@@ -258,12 +259,16 @@ def _current_position(client: TradingClient, ticker: str) -> tuple[str, int]:
     return "flat", 0
 
 
-def _close_position(client: TradingClient, ticker: str):
+def _close_position(client: TradingClient, ticker: str) -> bool:
+    """Returns True on success. Caller must skip the opening order on False."""
     try:
         client.close_position(ticker)
         print(f"  Closed existing {ticker} position.")
-    except Exception:
-        pass
+        return True
+    except Exception as exc:
+        print(f"  ERROR: close_position({ticker}) failed — {type(exc).__name__}: {exc}"
+              f" — skipping open order for {ticker}")
+        return False
 
 
 def _place_order(client: TradingClient, ticker: str, shares: int, signal: float, price: float):
@@ -271,8 +276,12 @@ def _place_order(client: TradingClient, ticker: str, shares: int, signal: float,
     order = MarketOrderRequest(
         symbol=ticker, qty=shares, side=side, time_in_force=TimeInForce.DAY,
     )
-    client.submit_order(order)
-    print(f"  [{side.value.upper()}] {shares} shares {ticker} @ ~${price:.2f}")
+    try:
+        client.submit_order(order)
+        print(f"  [{side.value.upper()}] {shares} shares {ticker} @ ~${price:.2f}")
+    except Exception as exc:
+        print(f"  ERROR: submit_order({ticker} {side.value.upper()} {shares}) failed — "
+              f"{type(exc).__name__}: {exc}")
 
 
 # ── Cloud Functions HTTP entry point ──────────────────────────────────────────
@@ -352,20 +361,58 @@ def run_daily(request):
         if dry_run:
             return ("Dry run complete — no orders placed", 200)
 
-        # ── Real-time buying-power check ───────────────────────────────────────
-        num_positions = len(plan)
-        buying_power  = float(trade_client.get_account().buying_power)
-        cap_notional  = MAX_PORTFOLIO_EXPOSURE_PCT * equity
-        print(f"\nActive signals: {num_positions}  |  Equity: ${equity:,.2f}  |  "
-              f"Buying power: ${buying_power:,.2f}  |  "
-              f"Target deployment: ${cap_notional:,.2f} ({MAX_PORTFOLIO_EXPOSURE_PCT:.0%})")
+        # ── Portfolio gross exposure cap ──────────────────────────────────────
+        all_positions  = trade_client.get_all_positions()
+        pos_by_symbol  = {p.symbol: p for p in all_positions}
 
-        plan_tickers = {t for t, *_ in plan}
+        # Separate holds (current == signal) from opens/flips (current != signal)
+        holds_rd, opens_rd = [], []
+        for entry in plan:
+            t, sig, price, kf, rk, nr = entry
+            cd, _ = _current_position(trade_client, t)
+            sig_dir = "long" if sig > 0 else "short"
+            if cd == sig_dir:
+                holds_rd.append(entry + (cd, sig_dir))
+            else:
+                opens_rd.append(entry + (cd, sig_dir))
+
+        held_gross = sum(
+            abs(float(pos_by_symbol[t].market_value))
+            for t, *_ in holds_rd
+            if t in pos_by_symbol
+        )
+        gross_cap        = MAX_PORTFOLIO_EXPOSURE_PCT * equity
+        remaining_cap    = max(0.0, gross_cap - held_gross)
+        num_opens        = len(opens_rd)
+        per_new_position = remaining_cap / num_opens if num_opens else 0.0
+        print(f"\nGross cap: ${gross_cap:,.2f}  |  Held: ${held_gross:,.2f}  |  "
+              f"Remaining: ${remaining_cap:,.2f}  |  Opens: {num_opens}  |  "
+              f"Per-new: ${per_new_position:,.2f}  |  Holds: {len(holds_rd)}")
+
+        # ── Reduce step: held_gross > gross_cap → scale down held positions ────
+        if held_gross > gross_cap and holds_rd:
+            scale = gross_cap / held_gross
+            print(f"\n-- Reducing held positions to {scale:.1%} of current --")
+            for t, sig, price, kf, rk, nr, cd, sig_dir in holds_rd:
+                target_notional = abs(float(pos_by_symbol[t].market_value)) * scale
+                target_sh = int(target_notional / price) if price > 0 else 0
+                _, current_qty = _current_position(trade_client, t)
+                delta = current_qty - target_sh
+                if delta > 0:
+                    reduce_side_val = "sell" if cd == "long" else "buy"
+                    reduce_signal = -1.0 if cd == "long" else 1.0
+                    _place_order(trade_client, t, delta, reduce_signal, price)
+                    log_trade(asset=t, regime=rk, n_regimes=nr,
+                              signal=round(sig, 4), kelly_fraction=round(kf, 4),
+                              action=f"reduce_{reduce_side_val}", signal_price=round(price, 2),
+                              fill_price=round(price, 2), shares=delta,
+                              account_equity=round(equity, 2))
 
         # ── Close flat-signal assets that still have open positions ───────────
+        plan_tickers_set = {t for t, *_ in plan}
         print("\n-- Reconciling flat assets --")
         for ticker in ASSETS:
-            if ticker not in plan_tickers:
+            if ticker not in plan_tickers_set:
                 current_dir, current_qty = _current_position(trade_client, ticker)
                 if current_dir != "flat":
                     print(f"  {ticker}: signal flat — closing {current_dir} position.")
@@ -375,23 +422,21 @@ def run_daily(request):
                               fill_price=0.0, shares=current_qty,
                               account_equity=round(equity, 2))
 
-        # ── Place, hold, or flip per-plan assets ──────────────────────────────
+        # ── Place opens and flips ─────────────────────────────────────────────
         print("\n-- Placing orders --")
-        for ticker, signal, price, kelly_f, regime_k, n_regimes in plan:
-            current_dir, current_qty = _current_position(trade_client, ticker)
-            signal_dir = "long" if signal > 0 else "short"
-            shares = _compute_position_size(equity, price, num_positions, buying_power)
-
-            if current_dir == signal_dir:
-                print(f"  {ticker}: already {current_dir} — holding.")
-                log_trade(asset=ticker, regime=regime_k, n_regimes=n_regimes,
-                          signal=round(signal, 4), kelly_fraction=round(kelly_f, 4),
-                          action="hold", signal_price=round(price, 2), fill_price=round(price, 2), shares=current_qty,
-                          account_equity=round(equity, 2))
-                continue
+        for ticker, signal, price, kelly_f, regime_k, n_regimes, current_dir, signal_dir \
+                in opens_rd:
+            shares = int(per_new_position / price) if price > 0 else 0
+            _, current_qty = _current_position(trade_client, ticker)
 
             if current_dir != "flat":
-                _close_position(trade_client, ticker)
+                if not _close_position(trade_client, ticker):
+                    log_trade(asset=ticker, regime=regime_k, n_regimes=n_regimes,
+                              signal=round(signal, 4), kelly_fraction=round(kelly_f, 4),
+                              action="close_failed", signal_price=round(price, 2),
+                              fill_price=0.0, shares=0,
+                              account_equity=round(equity, 2))
+                    continue
 
             if shares < 1:
                 print(f"  {ticker}: scaled to <1 share — skipping.")
@@ -408,8 +453,8 @@ def run_daily(request):
                       action=action, signal_price=round(price, 2), fill_price=round(price, 2), shares=shares,
                       account_equity=round(equity, 2))
 
-        if not plan:
-            print("No actionable signals — staying flat.")
+        if not opens_rd:
+            print("No new opens — staying flat or reducing only.")
 
         return ("Run completed", 200)
 
@@ -425,4 +470,12 @@ def run_daily(request):
 # ── Local testing shim ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    run_daily(None)
+    import argparse
+    parser = argparse.ArgumentParser(description="Run daily signal generation")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Generate signals without placing orders; print order plan")
+    args = parser.parse_args()
+    if args.dry_run:
+        os.environ["DRY_RUN"] = "true"
+    result = run_daily(None)
+    print(result[0] if isinstance(result, tuple) else result)

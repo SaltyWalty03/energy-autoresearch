@@ -20,14 +20,14 @@ Three-layer signal architecture:
 
   3. INTRADAY TIMING — RSI(14) + MACD histogram on 5-min Alpaca bars per asset.
                    Entry fires only when intraday indicator agrees with daily bias.
-                     long  entry: bias=long  AND RSI < 35 AND MACD hist flips +
-                     short entry: bias=short AND RSI > 65 AND MACD hist flips -
+                     long  entry: bias=long  AND RSI < 45 AND MACD hist > 0
+                     short entry: bias=short AND RSI > 55 AND MACD hist < 0
 
-Position sizing — regime-calibrated half-Kelly:
-  kelly_f      = max(0, (wf_sharpe_mean / sqrt(252)) * 0.5)
-  dollar_alloc = kelly_f * account.equity
-  shares       = min(int(dollar_alloc / price), MAX_SHARES_PER_ASSET)
-  Total gross exposure capped at MAX_EXPOSURE (95%) across all assets.
+Position sizing — equal-weight allocation:
+  per_position_notional = MAX_PORTFOLIO_EXPOSURE_PCT * equity / num_active_signals
+  safe_notional         = min(per_position_notional, buying_power)   [live Alpaca check]
+  shares                = int(safe_notional / price)
+  WF-Sharpe ≤ 0 → kelly_f = 0 → asset skipped (edge gate, not sizing).
 
 Assets traded: XLE (WTI shock filter), XLB (copper), XOP (WTI shock filter).
 
@@ -52,7 +52,6 @@ Scheduler:
 """
 import io
 import json
-import logging
 import math
 import pickle
 from datetime import datetime, timedelta, timezone
@@ -70,34 +69,55 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
 from google.cloud import secretmanager, storage
 
-from model import build_feature_matrix
+from model import (build_feature_matrix, N_BASE_FEATURES, N_EXTENDED_FEATURES,
+                   FEATURE_NAMES_BASE, FEATURE_NAMES_EXTENDED)
 from regime import classify_regime
+from src.universe import ASSETS  # canonical asset config — never duplicate inline
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
+import sys as _sys
+
+
+class _StructuredLogger:
+    """Emit Cloud Logging-compatible JSON to stdout (required for Gen 2 functions)."""
+
+    def _emit(self, severity: str, msg: str) -> None:
+        entry = json.dumps({"severity": severity, "message": msg})
+        print(entry, flush=True)
+
+    def info(self, msg: str, *args) -> None:
+        self._emit("INFO", msg % args if args else msg)
+
+    def warning(self, msg: str, *args) -> None:
+        self._emit("WARNING", msg % args if args else msg)
+
+    def error(self, msg: str, *args) -> None:
+        self._emit("ERROR", msg % args if args else msg)
+
+    def exception(self, msg: str, *args) -> None:
+        import traceback
+        tb = traceback.format_exc()
+        self._emit("ERROR", (msg % args if args else msg) + "\n" + tb)
+
+
+log = _StructuredLogger()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 GCS_BUCKET        = "energy-autoresearch-model"
 BIAS_CACHE_OBJ    = "bias_cache.json"
 LOCK_OBJECT       = "trade_lock.json"
+MODEL_POINTER_OBJ = "models/pointer.json"
+MODEL_PREFIX_DEFAULT = "models/"  # fallback when pointer is absent
 LOCK_TTL_SECONDS  = 90
 GCP_PROJECT       = "energy-autoresearch"
-MAX_SHARES_PER_ASSET = 100
-MAX_EXPOSURE      = 0.95      # cap total gross exposure as fraction of equity
-MODEL_THRESH      = 0.05
-RSI_OVERSOLD      = 35
-RSI_OVERBOUGHT    = 65
+MAX_PORTFOLIO_EXPOSURE_PCT = 0.80   # fraction of equity deployed across all concurrent positions
+MODEL_THRESH      = 0.02
+RSI_OVERSOLD      = 45
+RSI_OVERBOUGHT    = 55
 LOOKBACK_BARS     = 60
 ET                = pytz.timezone("America/New_York")
 MARKET_OPEN       = (9, 30)
 MARKET_CLOSE      = (15, 55)
 BLOCKING_STATUSES = {"partially_filled", "pending_new", "accepted", "new"}
-
-ASSETS = {
-    "XLE": {"commodity": "CL=F", "shock_thresh": 0.02},
-    "XLB": {"commodity": "HG=F", "shock_thresh": 0.025},
-    "XOP": {"commodity": "CL=F", "shock_thresh": 0.02},
-}
 
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -134,8 +154,13 @@ def _acquire_lock(gcs: storage.Client, owner: str) -> bool:
             log.warning("Lock held by '%s' (age=%.0fs) — skipping cycle.", existing.get("owner"), age)
             return False
         log.info("Overwriting stale lock (age=%.0fs).", age)
-    except Exception:
-        pass
+    except Exception as exc:
+        # NotFound is the normal "no lock held" case; anything else is worth seeing.
+        if type(exc).__name__ == "NotFound":
+            log.info("No existing lock object.")
+        else:
+            log.warning("Could not read existing lock (%s: %s) — acquiring anyway.",
+                        type(exc).__name__, exc)
     blob.upload_from_string(
         json.dumps({"owner": owner, "acquired_at": datetime.now(timezone.utc).isoformat()}),
         content_type="application/json",
@@ -148,8 +173,9 @@ def _release_lock(gcs: storage.Client):
     try:
         gcs.bucket(GCS_BUCKET).blob(LOCK_OBJECT).delete()
         log.info("Lock released.")
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("Lock release failed (%s: %s) — it will expire after %ds.",
+                    type(exc).__name__, exc, LOCK_TTL_SECONDS)
 
 
 # ── GCS model loading ─────────────────────────────────────────────────────────
@@ -162,29 +188,51 @@ def _gcs_load_pkl(gcs: storage.Client, obj_name: str):
 def _gcs_load_json(gcs: storage.Client, obj_name: str) -> dict:
     try:
         return json.loads(gcs.bucket(GCS_BUCKET).blob(obj_name).download_as_text())
-    except Exception:
+    except Exception as exc:
+        # A missing meta file silently becomes wf_sharpe=0 → no_edge, so always say so.
+        log.warning("GCS JSON %s unavailable (%s: %s) — using empty dict.",
+                    obj_name, type(exc).__name__, exc)
         return {}
 
 
-def _load_regime_stack(gcs: storage.Client, ticker: str):
+def _get_model_prefix(gcs: storage.Client) -> str:
+    """Read models/pointer.json to find the active versioned prefix."""
+    try:
+        data = json.loads(
+            gcs.bucket(GCS_BUCKET).blob(MODEL_POINTER_OBJ).download_as_text()
+        )
+        prefix = data.get("prefix", MODEL_PREFIX_DEFAULT)
+        log.info("Model prefix from pointer: %s (uploaded_at=%s)",
+                 prefix, data.get("uploaded_at", "?"))
+        return prefix
+    except Exception as exc:
+        log.warning("pointer.json unavailable (%s: %s) — using default prefix %s",
+                    type(exc).__name__, exc, MODEL_PREFIX_DEFAULT)
+        return MODEL_PREFIX_DEFAULT
+
+
+def _load_regime_stack(gcs: storage.Client, ticker: str, prefix: str = MODEL_PREFIX_DEFAULT):
     """
     Returns (full_model, full_meta, regime_model, regime_metas_list).
     Falls back gracefully if regime files are missing in GCS.
     """
-    full_model = _gcs_load_pkl(gcs, f"models/{ticker}_model.pkl")
-    full_meta  = _gcs_load_json(gcs, f"models/{ticker}_meta.json")
+    full_model = _gcs_load_pkl(gcs, f"{prefix}{ticker}_model.pkl")
+    full_meta  = _gcs_load_json(gcs, f"{prefix}{ticker}_meta.json")
     if not full_meta:
         full_meta = {"wf_sharpe_mean": 0.0}
 
+    log.info("%s: full model from prefix=%s  n_features=%d", ticker, prefix, full_model.n_features_)
+
     try:
-        regime_model = _gcs_load_pkl(gcs, f"models/{ticker}_regime.pkl")
-    except Exception:
-        log.warning("%s: regime.pkl missing in GCS — using full model.", ticker)
+        regime_model = _gcs_load_pkl(gcs, f"{prefix}{ticker}_regime.pkl")
+    except Exception as exc:
+        log.warning("%s: regime.pkl unavailable in GCS (%s: %s) — using full model.",
+                    ticker, type(exc).__name__, exc)
         return full_model, full_meta, None, []
 
     regime_metas = []
     for k in range(regime_model.n_regimes):
-        m = _gcs_load_json(gcs, f"models/{ticker}_regime{k}_meta.json")
+        m = _gcs_load_json(gcs, f"{prefix}{ticker}_regime{k}_meta.json")
         regime_metas.append(m if m else {"wf_sharpe_mean": 0.0})
 
     return full_model, full_meta, regime_model, regime_metas
@@ -204,12 +252,14 @@ def _save_bias_cache(gcs: storage.Client, data: dict):
 
 
 def _get_daily_bias_for_asset(
+    gcs: storage.Client,
     ticker: str,
     full_model,
     full_meta: dict,
     regime_model,
     regime_metas: list,
     cache_entry: dict,
+    prefix: str = MODEL_PREFIX_DEFAULT,
 ) -> dict:
     """
     Compute (or retrieve from cache) regime, bias, direction, wf_sharpe for one asset.
@@ -218,6 +268,10 @@ def _get_daily_bias_for_asset(
     raw = yf.download(ticker, period="90d", auto_adjust=True, progress=False)
     if isinstance(raw.columns, pd.MultiIndex):
         raw.columns = raw.columns.get_level_values(0)
+    if raw.empty or "Close" not in raw:
+        raise ValueError(f"{ticker}: yfinance returned no daily data")
+    log.info("%s: daily data rows=%d latest=%s close_NaNs=%d",
+             ticker, len(raw), raw.index[-1].date(), int(raw["Close"].isna().sum()))
     ret_lag = raw["Close"].dropna().pct_change().dropna().shift(1).dropna()
 
     # Regime classification
@@ -233,9 +287,12 @@ def _get_daily_bias_for_asset(
             regime_k = classify_regime(feat_vec, regime_model)
             if 0 <= regime_k < len(regime_metas):
                 meta_used = regime_metas[regime_k] if regime_metas[regime_k] else full_meta
-                # regime-specific model would need to be loaded separately;
-                # for cloud function we use the full model for prediction
-                # but regime-specific WF Sharpe for Kelly sizing
+                try:
+                    r_model = _gcs_load_pkl(gcs, f"{prefix}{ticker}_regime{regime_k}_model.pkl")
+                    model_used = r_model
+                except Exception as exc:
+                    log.warning("%s: regime-%d model unavailable in GCS (%s: %s) — using full model.",
+                                ticker, regime_k, type(exc).__name__, exc)
                 log.info("%s: regime %d of %d  wf_sharpe=%.4f",
                          ticker, regime_k, regime_model.n_regimes,
                          meta_used.get("wf_sharpe_mean", 0.0))
@@ -243,16 +300,40 @@ def _get_daily_bias_for_asset(
                 log.warning("%s: classify_regime=%d out of range — falling back.", ticker, regime_k)
                 regime_k = -1
 
+    # Schema assertion: compare model's stored feature names against meta JSON.
+    # Both must be populated by train_all.py >= 2026-10-24; older pickles that
+    # lack feature_names_ are rejected so the mismatch is caught on deploy not at runtime.
+    model_feat_names = getattr(model_used, "feature_names_", None)
+    meta_feat_names  = meta_used.get("feature_names")
+    if model_feat_names is None:
+        raise ValueError(
+            f"{ticker}: model pickle lacks feature_names_ — retrain with train_all.py "
+            f">= 2026-10-24 and push to GCS."
+        )
+    if meta_feat_names is not None and list(model_feat_names) != list(meta_feat_names):
+        raise ValueError(
+            f"{ticker}: feature name mismatch between pickle "
+            f"({model_feat_names}) and meta JSON ({meta_feat_names}). "
+            f"Push matching artifacts to GCS."
+        )
+    n_feat = model_used.n_features_
+    if n_feat not in (N_BASE_FEATURES, N_EXTENDED_FEATURES):
+        raise ValueError(
+            f"{ticker}: model has {n_feat} features — expected one of "
+            f"{FEATURE_NAMES_BASE} or {FEATURE_NAMES_EXTENDED}."
+        )
+
     bias      = float(model_used.predict(ret_lag.to_frame())[-1])
     direction = "long" if bias > MODEL_THRESH else ("short" if bias < -MODEL_THRESH else "flat")
     wf_sharpe = float(meta_used.get("wf_sharpe_mean", 0.0))
 
-    log.info("%s: bias=%.4f  direction=%s  regime=%d  wf_sharpe=%.4f",
-             ticker, bias, direction, regime_k, wf_sharpe)
+    log.info("%s: bias=%.4f  thresh=±%.2f  direction=%s  regime=%d  wf_sharpe=%.4f  model_features=%d",
+             ticker, bias, MODEL_THRESH, direction, regime_k, wf_sharpe, model_used.n_features_)
     return {"bias": bias, "direction": direction, "regime": regime_k, "wf_sharpe_mean": wf_sharpe}
 
 
-def _get_all_daily_biases(gcs: storage.Client, regime_stacks: dict) -> dict:
+def _get_all_daily_biases(gcs: storage.Client, regime_stacks: dict,
+                          prefix: str = MODEL_PREFIX_DEFAULT) -> dict:
     """
     Load or recompute per-asset bias entries. Returns dict keyed by ticker.
     Cache format: {"date": "YYYY-MM-DD", "XLE": {...}, "XLB": {...}, "XOP": {...}}
@@ -266,13 +347,25 @@ def _get_all_daily_biases(gcs: storage.Client, regime_stacks: dict) -> dict:
 
     log.info("Cache miss for %s — computing daily biases for all assets...", today)
     result = {}
+    failed = []
     for ticker, (full_model, full_meta, regime_model, regime_metas) in regime_stacks.items():
         cache_entry = cache.get(ticker, {})
-        result[ticker] = _get_daily_bias_for_asset(
-            ticker, full_model, full_meta, regime_model, regime_metas, cache_entry
-        )
+        try:
+            result[ticker] = _get_daily_bias_for_asset(
+                gcs, ticker, full_model, full_meta, regime_model, regime_metas,
+                cache_entry, prefix=prefix,
+            )
+        except Exception as exc:
+            # One asset's failure must not block the others; record why it is flat.
+            log.exception("%s: daily bias failed — asset skipped this cycle: %s", ticker, exc)
+            failed.append(ticker)
+            result[ticker] = {"bias": 0.0, "direction": "flat", "regime": -1,
+                              "wf_sharpe_mean": 0.0, "error": f"{type(exc).__name__}: {exc}"}
 
-    _save_bias_cache(gcs, {"date": today, **result})
+    if failed:
+        log.warning("Bias cache NOT saved — failed assets %s will be retried next cycle.", failed)
+    else:
+        _save_bias_cache(gcs, {"date": today, **result})
     return result
 
 
@@ -313,11 +406,10 @@ def _intraday_signal(df: pd.DataFrame, allowed_bias: str) -> tuple[str, float, f
     hist  = _macd_hist(close)
     latest_rsi  = float(rsi.iloc[-1])
     latest_hist = float(hist.iloc[-1])
-    prev_hist   = float(hist.iloc[-2])
 
-    if latest_rsi < RSI_OVERSOLD  and prev_hist < 0 <= latest_hist and allowed_bias == "long":
+    if latest_rsi < RSI_OVERSOLD  and latest_hist > 0 and allowed_bias == "long":
         return "long",  latest_rsi, latest_hist
-    if latest_rsi > RSI_OVERBOUGHT and prev_hist > 0 >= latest_hist and allowed_bias == "short":
+    if latest_rsi > RSI_OVERBOUGHT and latest_hist < 0 and allowed_bias == "short":
         return "short", latest_rsi, latest_hist
     return "flat", latest_rsi, latest_hist
 
@@ -332,8 +424,14 @@ def _current_position(trade_client: TradingClient, ticker: str) -> tuple[str, in
             return "long", qty
         elif qty < 0:
             return "short", abs(qty)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Alpaca answers 404 "position does not exist" when flat; anything else
+        # means the position is unknown and is being treated as flat.
+        if getattr(exc, "status_code", None) == 404 or "does not exist" in str(exc):
+            log.info("%s: no open position.", ticker)
+        else:
+            log.error("%s: get_open_position failed (%s: %s) — treating as flat.",
+                      ticker, type(exc).__name__, exc)
     return "flat", 0
 
 
@@ -351,21 +449,76 @@ def _check_pending_orders(trade_client: TradingClient) -> str | None:
     return None
 
 
-def _close_position(trade_client: TradingClient, ticker: str):
+def _close_position(trade_client: TradingClient, ticker: str) -> bool:
+    """Returns True on success. Caller must skip the opening order on False."""
     try:
         trade_client.close_position(ticker)
         log.info("Closed existing %s position.", ticker)
+        return True
     except Exception as exc:
-        log.info("close_position(%s): %s", ticker, exc)
+        log.error("close_position(%s) FAILED — skipping open order: %s: %s",
+                  ticker, type(exc).__name__, exc)
+        return False
 
 
-# ── Kelly sizing ──────────────────────────────────────────────────────────────
+# ── Kelly edge guard ──────────────────────────────────────────────────────────
 
 def _kelly_fraction(wf_sharpe_mean: float) -> float:
-    """Half-Kelly, annualised-to-daily conversion. Returns 0 if no edge."""
+    """Skip gate only — returns 0 when the model has no validated edge (wf_sharpe ≤ 0).
+    No longer used for dollar sizing; see _compute_position_size."""
     if wf_sharpe_mean <= 0:
         return 0.0
     return (wf_sharpe_mean / math.sqrt(252)) * 0.5
+
+
+# ── Position sizing (swap body here to change weighting scheme) ────────────────
+
+def _compute_position_size(
+    equity: float,
+    price: float,
+    num_positions: int,
+    buying_power: float,
+    *,
+    max_exposure: float = MAX_PORTFOLIO_EXPOSURE_PCT,
+) -> int:
+    """
+    Equal-weight allocation across num_positions concurrent positions.
+
+    Formula
+    -------
+        per_position_notional = max_exposure * equity / num_positions
+        safe_notional         = min(per_position_notional, buying_power)
+        shares                = int(safe_notional / price)
+
+    The buying_power clamp enforces the 80 % cap against Alpaca's live account
+    state before every order, not just at signal-generation time.
+
+    To swap to inverse-volatility weighting later, replace this function body
+    while keeping the signature unchanged — order-execution code is untouched.
+    """
+    if num_positions <= 0 or price <= 0:
+        return 0
+    raw_notional  = max_exposure * equity / num_positions
+    safe_notional = min(raw_notional, max(0.0, buying_power))
+    return int(safe_notional / price)
+
+
+# ── Decision summary ──────────────────────────────────────────────────────────
+
+_ORDER_ACTIONS = {"buy", "sell"}
+
+
+def _log_decision_summary(results: dict) -> None:
+    """One line per cycle stating, for every asset, the order placed or the stage that filtered it."""
+    parts = []
+    for ticker, r in results.items():
+        action = r.get("action", "?")
+        if action in _ORDER_ACTIONS:
+            parts.append(f"{ticker}={action.upper()} {r.get('qty')}")
+        else:
+            parts.append(f"{ticker}={action}({r.get('reason', 'no reason recorded')})")
+    traded = any(r.get("action") in _ORDER_ACTIONS for r in results.values())
+    log.info("%s: %s", "DECISION" if traded else "NO TRADE", "; ".join(parts))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -388,6 +541,7 @@ def run_daily(request):
 
         # ── Distributed lock ──────────────────────────────────────────────────
         if not _acquire_lock(gcs, owner="cloud_function"):
+            log.info("NO TRADE: stage=lock (trade lock held by another process).")
             return (json.dumps({"status": "locked", "message": "Trade lock held."}),
                     200, {"Content-Type": "application/json"})
 
@@ -395,15 +549,16 @@ def run_daily(request):
         trade_client = TradingClient(api_key, secret_key, paper=True)
         pending = _check_pending_orders(trade_client)
         if pending:
-            log.warning("Pending orders — skipping. %s", pending)
+            log.warning("NO TRADE: stage=pending_orders. %s", pending)
             _release_lock(gcs)
             return (json.dumps({"status": "pending", "message": pending}), 200,
                     {"Content-Type": "application/json"})
 
         # ── Layer 1+2: regime + daily bias (cached per asset) ─────────────────
         log.info("Loading regime stacks for all assets...")
-        regime_stacks = {t: _load_regime_stack(gcs, t) for t in ASSETS}
-        biases = _get_all_daily_biases(gcs, regime_stacks)
+        model_prefix  = _get_model_prefix(gcs)
+        regime_stacks = {t: _load_regime_stack(gcs, t, model_prefix) for t in ASSETS}
+        biases = _get_all_daily_biases(gcs, regime_stacks, prefix=model_prefix)
 
         equity = float(trade_client.get_account().equity)
         log.info("Account equity: $%.2f", equity)
@@ -429,8 +584,13 @@ def run_daily(request):
                 "kelly_f": round(kelly_f, 4),
             }
 
-            if allowed == "flat" or kelly_f == 0.0:
-                reason = "flat_bias" if allowed == "flat" else "no_edge"
+            if b.get("error") or allowed == "flat" or kelly_f == 0.0:
+                if b.get("error"):
+                    reason = f"bias_error: {b['error']}"
+                elif allowed == "flat":
+                    reason = f"flat_bias |{bias:.4f}| <= {MODEL_THRESH}"
+                else:
+                    reason = f"no_edge wf_sharpe={wf_sharpe:.4f} <= 0"
                 log.info("%s: skipping (%s).", ticker, reason)
                 asset_result["action"] = "skip"
                 asset_result["reason"] = reason
@@ -442,12 +602,14 @@ def run_daily(request):
             except Exception as exc:
                 log.warning("%s: intraday bars failed: %s", ticker, exc)
                 asset_result["action"] = "no_data"
+                asset_result["reason"] = f"intraday_bars_error: {exc}"
                 results[ticker] = asset_result
                 continue
 
             if len(df) < 30:
                 log.warning("%s: only %d bars.", ticker, len(df))
                 asset_result["action"] = "insufficient_bars"
+                asset_result["reason"] = f"only {len(df)} intraday bars (< 30)"
                 results[ticker] = asset_result
                 continue
 
@@ -469,61 +631,130 @@ def run_daily(request):
 
             if direction == "flat":
                 asset_result["action"] = "flat"
+                asset_result["reason"] = (
+                    f"intraday not confirmed for {allowed}: RSI={rsi:.1f} "
+                    + (f"(need < {RSI_OVERSOLD}) MACDh={hist:.4f} (need > 0)" if allowed == "long"
+                       else f"(need > {RSI_OVERBOUGHT}) MACDh={hist:.4f} (need < 0)")
+                )
                 results[ticker] = asset_result
                 continue
 
             plan.append((ticker, direction, bias, wf_sharpe, kelly_f, latest_price,
                          current_dir, current_qty, asset_result))
 
-        # ── Exposure cap across all assets ────────────────────────────────────
-        scale = 1.0
-        if plan:
-            total_alloc = sum(entry[4] * equity for entry in plan)  # entry[4] = kelly_f
-            max_alloc = MAX_EXPOSURE * equity
-            if total_alloc > max_alloc:
-                scale = max_alloc / total_alloc
-                log.info("Scaling positions by %.3f (alloc $%.0f > cap $%.0f)",
-                         scale, total_alloc, max_alloc)
+        # ── Portfolio gross exposure cap ──────────────────────────────────────
+        # Held:  direction == current_dir → position stays unchanged.
+        # Opens: direction != current_dir (new entry or flip) → close first, then open.
+        #
+        # held_gross = sum(abs(market_value)) for HOLDS only (flips will be closed).
+        # remaining_cap = gross_cap - held_gross.
+        # per_new_position = remaining_cap / #opens.
+        #
+        # If held_gross > gross_cap (e.g. 2x book), emit reduce orders proportionally
+        # before opening new ones.
+        all_positions   = trade_client.get_all_positions()
+        pos_by_symbol   = {p.symbol: p for p in all_positions}
 
-        # ── Place orders ──────────────────────────────────────────────────────
+        holds = [(t, d, b, w, k, p, cd, cq, ar) for t, d, b, w, k, p, cd, cq, ar in plan
+                 if d == cd]
+        opens = [(t, d, b, w, k, p, cd, cq, ar) for t, d, b, w, k, p, cd, cq, ar in plan
+                 if d != cd]
+
+        # abs(market_value) handles short positions (Alpaca returns negative for shorts)
+        held_gross = sum(
+            abs(float(pos_by_symbol[t].market_value))
+            for t, *_ in holds
+            if t in pos_by_symbol
+        )
+        gross_cap        = MAX_PORTFOLIO_EXPOSURE_PCT * equity
+        remaining_cap    = max(0.0, gross_cap - held_gross)
+        num_opens        = len(opens)
+        per_new_position = remaining_cap / num_opens if num_opens else 0.0
+
+        log.info("Gross cap: $%.2f  |  Held: $%.2f  |  Remaining: $%.2f  |  "
+                 "Opens: %d  |  Per-new: $%.2f  |  Holds: %d",
+                 gross_cap, held_gross, remaining_cap, num_opens, per_new_position, len(holds))
+
+        # ── Reduce step: held_gross exceeds cap → scale held positions down ────
+        if held_gross > gross_cap and holds:
+            scale = gross_cap / held_gross
+            log.warning("held_gross $%.2f > gross_cap $%.2f — scaling held positions to %.1f%%",
+                        held_gross, gross_cap, scale * 100)
+            for ticker, direction, _, _, _, latest_price, _, current_qty, asset_result in holds:
+                target_notional = abs(float(pos_by_symbol[ticker].market_value)) * scale
+                target_shares   = int(target_notional / latest_price) if latest_price > 0 else 0
+                delta_shares    = current_qty - target_shares  # always > 0 (we're reducing)
+                if delta_shares > 0:
+                    reduce_side = OrderSide.SELL if direction == "long" else OrderSide.BUY
+                    try:
+                        order = trade_client.submit_order(MarketOrderRequest(
+                            symbol=ticker, qty=delta_shares, side=reduce_side,
+                            time_in_force=TimeInForce.DAY,
+                        ))
+                        log.info("REDUCE %s: %s %d sh (from %d → %d target)  order=%s",
+                                 ticker, reduce_side.value.upper(), delta_shares,
+                                 current_qty, target_shares, order.id)
+                        asset_result.update({"action": "reduce", "qty": delta_shares,
+                                             "order_id": str(order.id),
+                                             "reason": f"held_gross {held_gross:.0f} > cap {gross_cap:.0f}"})
+                    except Exception as exc:
+                        log.error("REDUCE %s failed: %s", ticker, exc)
+                        asset_result["action"] = "reduce_failed"
+                        asset_result["reason"] = str(exc)
+                    results[ticker] = asset_result
+
+        # Remove holds from plan — only process opens below
+        plan = opens
+
+        # ── Place opens/flips ─────────────────────────────────────────────────
         for ticker, direction, bias, wf_sharpe, kelly_f, latest_price, \
-                current_dir, current_qty, asset_result in plan:
+                current_dir, current_qty, asset_result in plan:  # plan is now opens only
 
-            target_shares = min(int(kelly_f * scale * equity / latest_price),
-                                MAX_SHARES_PER_ASSET)
+            target_shares = int(per_new_position / latest_price) if latest_price > 0 else 0
+            log.info("%s: allocated=$%.0f (%d sh)  kelly_f=%.4f",
+                     ticker, per_new_position, target_shares, kelly_f)
+            asset_result.update({"target_shares": target_shares,
+                                 "notional_allocated": round(per_new_position, 2)})
 
-            if direction == current_dir:
-                log.info("%s: already %s — holding.", ticker, current_dir)
-                asset_result["action"] = "hold"
+            if current_dir != "flat":
+                if not _close_position(trade_client, ticker):
+                    asset_result["action"] = "close_failed"
+                    asset_result["reason"] = f"close of {current_dir} {current_qty} sh failed — open skipped"
+                    results[ticker] = asset_result
+                    continue
+                current_qty = 0
+
+            current_signed = current_qty if current_dir == "long" else -current_qty
+            target_signed  = target_shares if direction == "long" else -target_shares
+            delta          = target_signed - current_signed
+
+            if delta == 0 or target_shares < 1:
+                log.info("%s: delta=0 or target<1 share — skipping.", ticker)
+                asset_result["action"] = "skipped"
+                asset_result["reason"] = (
+                    f"size rounds to {target_shares} sh "
+                    f"(allocated ${per_new_position:.0f} @ ${latest_price:.2f})"
+                    if target_shares < 1 else "delta=0"
+                )
             else:
-                if current_dir != "flat":
-                    _close_position(trade_client, ticker)
-
-                current_signed = current_qty if current_dir == "long" else -current_qty
-                target_signed  = target_shares if direction == "long" else -target_shares
-                delta          = target_signed - current_signed
-
-                if delta == 0 or target_shares < 1:
-                    log.info("%s: delta=0 or target<1 share — skipping.", ticker)
-                    asset_result["action"] = "skipped"
-                else:
-                    side  = OrderSide.BUY if delta > 0 else OrderSide.SELL
-                    order = trade_client.submit_order(MarketOrderRequest(
-                        symbol=ticker, qty=abs(delta), side=side,
-                        time_in_force=TimeInForce.DAY,
-                    ))
-                    log.info("Order: %s %d %s @ ~$%.2f (kelly_f=%.4f wf=%.4f)",
-                             side.value.upper(), abs(delta), ticker, latest_price, kelly_f, wf_sharpe)
-                    asset_result.update({
-                        "action": side.value, "qty": abs(delta),
-                        "order_id": str(order.id),
-                    })
+                side  = OrderSide.BUY if delta > 0 else OrderSide.SELL
+                order = trade_client.submit_order(MarketOrderRequest(
+                    symbol=ticker, qty=abs(delta), side=side,
+                    time_in_force=TimeInForce.DAY,
+                ))
+                log.info("Order: %s %d %s @ ~$%.2f  notional=$%.0f  wf=%.4f",
+                         side.value.upper(), abs(delta), ticker, latest_price,
+                         abs(delta) * latest_price, wf_sharpe)
+                asset_result.update({
+                    "action": side.value, "qty": abs(delta),
+                    "order_id": str(order.id),
+                })
 
             results[ticker] = asset_result
 
+        _log_decision_summary(results)
         _release_lock(gcs)
-        return (json.dumps({"status": "ok", "equity": equity,
-                            "scale": round(scale, 4), "assets": results}),
+        return (json.dumps({"status": "ok", "equity": equity, "assets": results}),
                 200, {"Content-Type": "application/json"})
 
     except Exception as exc:

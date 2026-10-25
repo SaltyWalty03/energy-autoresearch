@@ -1,0 +1,11 @@
+yfinance>=0.2.51
+numpy>=1.26.0
+pandas>=2.1.0
+scikit-learn==1.8.0
+xgboost>=2.0.0
+scipy>=1.12.0
+alpaca-py>=0.18.0
+google-cloud-storage>=2.0.0
+pytz>=2024.1
+pyarrow>=14.0.0
+functions-framework>=3.0.0

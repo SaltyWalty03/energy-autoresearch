@@ -2,6 +2,8 @@ REFLECTION MEMO — XLE Direction Model Research
 energy-autoresearch project
 Date: 2026-05-27
 Author: Autonomous ML Research Agent
+
+Link to GitHub: https://github.com/SaltyWalty03/energy-autoresearch
 ===========================================================
 
 WHAT WORKED

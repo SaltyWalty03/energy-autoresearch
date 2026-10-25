@@ -1,0 +1,85 @@
+run_id,session,timestamp,description,model,n_estimators,max_depth,min_samples_leaf,train_window,wti_thresh,val_sharpe,wf_sharpe,status,notes
+det_001,Det-S1,2026-04-20,OLS on 24 alternative-data features,OLS (statsmodels),—,—,—,full,—,-0.739,—,reference,IS Sharpe 1.007; most features p>0.10
+det_002,Det-S1,2026-04-20,"OLS selected+engineered (10 features, trend/lag)",OLS (selected),—,—,—,full,—,0.039,—,discard,IS Sharpe 1.218; OOS near-zero
+det_003,Det-S1,2026-04-20,Ridge / Lasso with cross-validated alpha,Ridge/Lasso,—,—,—,full,—,0.613,—,keep,Lasso zeroed most features at alpha=0.1
+det_004,Det-S1,2026-04-20,"RandomForest n=300, d=4, msl=15 (regressor)",RF Regressor,300,4,15,full,—,-0.705,—,discard,IS Sharpe 4.652 — severe overfit
+det_006,Det-S1,2026-04-20,Lasso + signal threshold sweep; 5-fold walk-forward,Lasso+threshold,—,—,—,full,—,0.613,-0.2405,keep,WF=-0.24 reveals fragility
+det_007,Det-S1,2026-04-20,Signal audit: 15 non-financial signals individually,Individual signals,—,—,—,full,—,1.687,—,keep,Best: trend_oil_price_4w_mom (p=0.002)
+det_008,Det-S1,2026-04-20,Normalised signal composite (EW + OLS-weighted),Signal composite,—,—,—,full,—,0.663,—,keep,5 signals combined
+det_009,Det-S1,2026-04-20,"Lasso fine alpha grid (40-pt, 1e-5 to 0.1) on top signals",Lasso (fine grid),—,—,—,full,—,0.613,—,keep,Fixes alpha=0.1 collapse in det_003
+det_010,Det-S1,2026-04-20,Walk-forward: best signal + Lasso ensemble (5-fold),Signal+Lasso WF,—,—,—,full,—,1.042,0.5733,keep,Ensemble of trend signal + Lasso
+tsv_002,S1,2026-04-16 17:12:10,Pre-session smoke test,RandomForest,—,—,—,756,—,0.8347,—,smoke,
+tsv_003,S1,2026-04-16 17:13:23,Pre-session smoke test,RandomForest,—,—,—,756,—,0.8347,—,smoke,
+tsv_004,S1,2026-04-18 17:57:42,LinearRegression baseline,LinearRegression,—,—,—,756,—,0.8584,—,reference,
+tsv_005,S1,2026-04-18 17:58:28,RF: RetFeatures + Ridge,Ridge,—,—,—,756,—,0.0653,—,discard,
+tsv_006,S1,2026-04-18 17:58:46,GradientBoostingRegressor,GradientBoosting,—,—,—,756,—,0.1524,—,discard,
+tsv_007,S1,2026-04-18 17:59:07,Rolling z/RSI/vol + Ridge,Ridge,—,—,—,756,—,0.4703,—,discard,
+tsv_008,S1,2026-04-18 17:59:44,Rolling feat + LogisticReg,LogisticReg,—,—,—,756,—,0.9581,—,keep,
+tsv_009,S1,2026-04-18 18:00:04,LogReg + lag2/lag3/MACD/RSI,RandomForest,—,—,—,756,—,0.8824,—,discard,
+tsv_010,S1,2026-04-18 18:01:49,"RF depth=3, msl=30",RandomForest,—,3,30,756,—,1.2623,—,keep,
+tsv_011,S1,2026-04-18 18:03:53,"RF d=2, msl=25, sqrt, n=200",RandomForest,200,2,25,756,—,1.3092,—,keep,
+tsv_012,S1,2026-04-18 18:07:32,"MLPClassifier (128,) alpha=1",MLPClassifier,—,—,—,756,—,1.1365,—,discard,
+tsv_013,S1,2026-04-18 18:08:47,"RF n=300, d=2, msl=20",RandomForest,300,2,20,756,—,1.3717,—,keep,
+tsv_014,S1,2026-04-18 18:09:27,"RF n=200, d=2, msl=22",RandomForest,200,2,22,756,—,1.3954,—,best-s1,
+tsv_015,S1,2026-04-18 18:18:31,Direct Sharpe optimizer (tanh),SharpeOptimizer,—,—,—,756,—,0.0267,—,discard,
+tsv_016,S1,2026-04-18 18:35:17,"Restored RF n=200, d=2, msl=22",RandomForest,200,2,22,756,—,1.3954,—,keep,
+tsv_001,S1,ÿþ2026-04-15 11:53:27,Pre-session smoke test,RandomForest,—,—,—,756,—,0.822,—,smoke,
+tsv_017,S2,2026-04-25 11:50:14,Session 2 start,RandomForest,—,—,—,756,—,1.1685,—,smoke,
+tsv_018,S2,2026-04-25 11:53:36,S2 intermediate,RandomForest,—,—,—,756,—,0.742,—,discard,
+tsv_019,S2,2026-04-25 11:58:53,S2 intermediate,RandomForest,—,—,—,756,—,0.7372,—,discard,
+tsv_020,S2,2026-04-25 12:09:03,S2 intermediate (+roll window),RandomForest,—,—,—,756,—,1.8278,—,keep,
+tsv_021,S2,2026-04-25 12:37:21,WTI shock filter thresh=3%,RandomForest,—,—,—,756,0.03,2.0219,—,keep,
+tsv_022,S2,2026-04-25 12:38:53,WTI shock filter thresh=2%,RandomForest,—,—,—,756,0.02,2.2119,—,best-committed,
+tsv_023,S2,2026-04-25 12:39:14,WTI shock filter thresh=1.5%,RandomForest,—,—,—,756,0.015,2.0065,—,discard,
+tsv_024,S2,2026-04-25 12:40:51,WTI ret1+mom5 as RF inputs,RandomForest,—,—,—,756,—,1.3403,—,discard,
+tsv_025,S2,2026-04-25 12:41:38,Contrarian signal on shock days,SignalComposite,—,—,—,756,—,1.9532,—,discard,
+run_001,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=22, win=20, wti=0.02, tw=756",RandomForest,300,2,22,756,0.02,2.5903,—,keep,reference baseline
+run_002,Sweep,2026-04-25,"HP sweep: n=300, d=3, msl=22, win=20, wti=0.02, tw=756",RandomForest,300,3,22,756,0.02,2.5941,—,keep,+0.0038 Sharpe over baseline
+run_003,Sweep,2026-04-25,"HP sweep: n=300, d=4, msl=22, win=20, wti=0.02, tw=756",RandomForest,300,4,22,756,0.02,2.0454,—,discard,-0.5449 Sharpe vs baseline (2.5903)
+run_004,Sweep,2026-04-25,"HP sweep: n=300, d=1, msl=22, win=20, wti=0.02, tw=756",RandomForest,300,1,22,756,0.02,0.712,—,discard,-1.8783 Sharpe vs baseline (2.5903)
+run_005,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=10, win=20, wti=0.02, tw=756",RandomForest,300,2,10,756,0.02,2.6104,—,keep,+0.0201 Sharpe over baseline
+run_006,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=50, win=20, wti=0.02, tw=756",RandomForest,300,2,50,756,0.02,1.7419,—,discard,-0.8484 Sharpe vs baseline (2.5903)
+run_007,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=100, win=20, wti=0.02, tw=756",RandomForest,300,2,100,756,0.02,1.8515,—,discard,-0.7388 Sharpe vs baseline (2.5903)
+run_008,Sweep,2026-04-25,"HP sweep: n=100, d=2, msl=22, win=20, wti=0.02, tw=756",RandomForest,100,2,22,756,0.02,2.5363,—,discard,-0.0540 Sharpe vs baseline (2.5903)
+run_009,Sweep,2026-04-25,"HP sweep: n=600, d=2, msl=22, win=20, wti=0.02, tw=756",RandomForest,600,2,22,756,0.02,2.599,—,keep,+0.0087 Sharpe over baseline
+run_010,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=22, win=10, wti=0.02, tw=756",RandomForest,300,2,22,756,0.02,2.5903,—,discard,0.0000 Sharpe vs baseline (2.5903)
+run_011,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=22, win=40, wti=0.02, tw=756",RandomForest,300,2,22,756,0.02,2.5903,—,discard,0.0000 Sharpe vs baseline (2.5903)
+run_012,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=22, win=20, wti=0.03, tw=756",RandomForest,300,2,22,756,0.03,2.3902,—,discard,-0.2001 Sharpe vs baseline (2.5903)
+run_013,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=22, win=20, wti=0.01, tw=756",RandomForest,300,2,22,756,0.01,1.5038,—,discard,-1.0865 Sharpe vs baseline (2.5903)
+run_014,Sweep,2026-04-25,"HP sweep: n=300, d=2, msl=22, win=20, wti=0.02, tw=504",RandomForest,300,2,22,504,0.02,1.2833,—,discard,-1.3070 Sharpe vs baseline (2.5903)
+run_015,Sweep,2026-04-25,"HP sweep: n=300, d=3, msl=15, win=10, wti=0.02, tw=756",RandomForest,300,3,15,756,0.02,2.401,—,discard,-0.1893 Sharpe vs baseline (2.5903)
+tsv_026,S3,2026-04-30 17:34:01,S3 early probe,RandomForest,—,—,—,756,—,0.7453,—,smoke,
+tsv_027,S3,2026-05-06 17:28:43,S3 early probe,RandomForest,—,—,—,756,—,1.6544,—,smoke,
+tsv_028,S3,2026-05-07 21:58:38,S3 run,RandomForest,—,—,—,756,—,2.0925,—,keep,
+tsv_029,S3,2026-05-07 22:01:14,S3 run,RandomForest,—,—,—,756,—,1.9338,—,discard,
+tsv_030,S3,2026-05-07 22:02:50,S3 run,RandomForest,—,—,—,756,—,1.698,—,discard,
+tsv_031,S3,2026-05-07 22:04:22,S3 run,RandomForest,—,—,—,756,—,1.3099,—,discard,
+tsv_032,S3,2026-05-07 22:05:24,S3 run,RandomForest,—,—,—,756,—,0.7485,—,discard,
+tsv_033,S3,2026-05-07 22:06:46,S3 run,RandomForest,—,—,—,756,—,1.9362,—,keep,
+tsv_034,S3,2026-05-07 22:54:28,S3 run,RandomForest,—,—,—,756,—,1.7698,—,discard,
+tsv_035,S3,2026-05-07 22:59:39,S3 run,RandomForest,—,—,—,756,—,1.666,—,discard,
+tsv_036,S3,2026-05-07 23:01:18,S3 run,RandomForest,—,—,—,756,—,1.5416,—,discard,
+tsv_037,S3,2026-05-07 23:04:32,S3 run,RandomForest,—,—,—,756,—,1.7753,—,keep,
+tsv_038,S3,2026-05-07 23:05:28,S3 run,RandomForest,—,—,—,756,—,1.1332,—,discard,
+tsv_039,S3,2026-05-07 23:06:45,S3 run,RandomForest,—,—,—,756,—,2.0365,—,keep,
+tsv_040,S3,2026-05-07 23:07:17,S3 run,RandomForest,—,—,—,756,—,2.1316,—,keep,
+tsv_041,S3,2026-05-07 23:07:37,S3 peak: msl tune,RandomForest,—,—,—,756,—,2.1982,—,best-s3,
+tsv_042,S3,2026-05-07 23:07:55,S3 run,RandomForest,—,—,—,756,—,1.9865,—,discard,
+tsv_043,S3,2026-05-07 23:08:12,S3 run,RandomForest,—,—,—,756,—,2.079,—,keep,
+tsv_044,S3,2026-05-07 23:08:49,S3 run,RandomForest,—,—,—,756,—,1.0358,—,discard,
+tsv_045,S3,2026-05-07 23:09:22,S3 run,RandomForest,—,—,—,756,—,2.1776,—,keep,
+tsv_046,S3,2026-05-07 23:09:53,S3 run,RandomForest,—,—,—,756,—,2.1563,—,keep,
+tsv_047,S3,2026-05-07 23:10:19,S3 run,RandomForest,—,—,—,756,—,2.0418,—,keep,
+tsv_048,S3,2026-05-07 23:10:44,S3 run,RandomForest,—,—,—,756,—,2.0526,—,keep,
+tsv_049,S3,2026-05-07 23:11:32,S3 run,RandomForest,—,—,—,756,—,0.4453,—,discard,
+tsv_050,Post,2026-05-18 11:03:51,Post-cleanup smoke test,RandomForest,—,—,—,756,—,2.5903,—,smoke,
+tsv_051,Post,2026-05-18 17:45:47,XGBoost baseline,XGBoost,—,—,—,756,—,0.5408,-0.3981,discard,
+tsv_052,Post,2026-05-18 17:52:04,"XGBoost d=2, n=800",XGBoost,800,2,—,756,—,0.2908,-0.6807,discard,
+tsv_053,Post,2026-05-18 17:52:26,RF baseline + walk-forward,RandomForest,—,—,—,756,—,2.5949,0.3226,keep,
+exp_001,Ablation,2026-05-27T23:40:32,Baseline: LinearRegression on ret_lag only,LinearRegression,—,—,—,—,—,0.5932,0.0,ablation,Baseline: LinearRegression on ret_lag only
+exp_002,Ablation,2026-05-27T23:40:34,"RF direction classifier — Session 1 best (n=200, depth=2, msl=22, no shock filter)",RandomForest,200,2,22,756,99.0,1.8282,0.337,ablation,"RF direction classifier — Session 1 best (n=200, depth=2, msl=22, no shock filter)"
+exp_003,Ablation,2026-05-27T23:40:36,"RF sweep baseline (n=300, depth=2, msl=22, wti_thresh=2%)",RandomForest,300,2,22,756,0.02,1.9616,0.3012,ablation,"RF sweep baseline (n=300, depth=2, msl=22, wti_thresh=2%)"
+exp_004,Ablation,2026-05-27T23:40:37,"RF depth ablation (n=300, depth=4, msl=22, wti_thresh=2%) — run_003",RandomForest,300,4,22,756,0.02,2.4791,0.1485,ablation,"RF depth ablation (n=300, depth=4, msl=22, wti_thresh=2%) — run_003"
+exp_005,Ablation,2026-05-27T23:40:42,"RF best sweep (n=600, depth=2, msl=22, wti_thresh=2%) — run_009",RandomForest,600,2,22,756,0.02,2.2959,0.1998,ablation,"RF best sweep (n=600, depth=2, msl=22, wti_thresh=2%) — run_009"
+exp_006,Ablation,2026-05-27T23:40:44,"RF shock-filter ablation — no WTI filter (n=300, depth=2, msl=22)",RandomForest,300,2,22,756,99.0,1.8296,0.4611,ablation,"RF shock-filter ablation — no WTI filter (n=300, depth=2, msl=22)"
+exp_007,Ablation,2026-05-27T23:40:46,"RF training-window ablation (n=300, depth=2, msl=22, train_window=504, wti_thresh=2%)",RandomForest,300,2,22,504,0.02,1.0928,0.246,ablation,"RF training-window ablation (n=300, depth=2, msl=22, train_window=504, wti_thresh=2%)"

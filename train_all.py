@@ -33,7 +33,7 @@ MODELS_DIR.mkdir(exist_ok=True)
 from src.universe import ASSETS
 from src.regime import fit_regimes
 from prepare import load_and_split_data, walk_forward_sharpe
-from model import DirectionModel, build_feature_matrix
+from model import DirectionModel, build_feature_matrix, FEATURE_NAMES_EXTENDED
 
 
 def _fold_sharpe(y_true, y_pred):
@@ -74,6 +74,7 @@ def train_asset(ticker: str, cfg: dict) -> dict:
     _save_json(MODELS_DIR / f"{ticker}_meta.json", {
         "ticker": ticker, "wf_sharpe_mean": wf_mean, "wf_sharpe_std": wf_std,
         "commodity": cfg["commodity"], "shock_thresh": cfg["shock_thresh"],
+        "feature_names": getattr(model, "feature_names_", FEATURE_NAMES_EXTENDED),
     })
 
     # ── Regime discovery ───────────────────────────────────────────────────────
@@ -119,6 +120,7 @@ def train_asset(ticker: str, cfg: dict) -> dict:
         _save_json(MODELS_DIR / f"{ticker}_regime{k}_meta.json", {
             "ticker": ticker, "regime": k, "n_rows": int(n_rows),
             "wf_sharpe_mean": r_wf_mean, "wf_sharpe_std": r_wf_std, "fallback": False,
+            "feature_names": getattr(r_model, "feature_names_", FEATURE_NAMES_EXTENDED),
         })
         regime_results.append({"regime": k, "n_rows": int(n_rows),
                                 "wf_sharpe_mean": r_wf_mean, "wf_sharpe_std": r_wf_std})

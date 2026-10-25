@@ -1,11 +1,13 @@
 .env
+env.yaml
 __pycache__/
 *.pyc
 *.pyo
 *.pkl
-models/*.pkl
+models/
 data/eia_cache/
 data/openmeteo_cache/
 data/trends_cache/
 data/model_cache/
 .claude/settings.local.json
+logs/

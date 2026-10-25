@@ -1,0 +1,16 @@
+run_id,config,final_metric,best_metric,status,notes
+run_001,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",2.5903,2.5903,Keep,reference baseline
+run_002,"{""n_estimators"": 300, ""max_depth"": 3, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",2.5941,2.5941,Keep,+0.0038 Sharpe over baseline
+run_003,"{""n_estimators"": 300, ""max_depth"": 4, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",2.0454,2.0454,Discard,-0.5449 Sharpe vs baseline (2.5903)
+run_004,"{""n_estimators"": 300, ""max_depth"": 1, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",0.712,0.712,Discard,-1.8783 Sharpe vs baseline (2.5903)
+run_005,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 10, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",2.6104,2.6104,Keep,+0.0201 Sharpe over baseline
+run_006,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 50, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",1.7419,1.7419,Discard,-0.8484 Sharpe vs baseline (2.5903)
+run_007,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 100, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",1.8515,1.8515,Discard,-0.7388 Sharpe vs baseline (2.5903)
+run_008,"{""n_estimators"": 100, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",2.5363,2.5363,Discard,-0.0540 Sharpe vs baseline (2.5903)
+run_009,"{""n_estimators"": 600, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 756}",2.599,2.599,Keep,+0.0087 Sharpe over baseline
+run_010,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 10, ""wti_thresh"": 0.02, ""train_window"": 756}",2.5903,2.5903,Discard,0.0000 Sharpe vs baseline (2.5903)
+run_011,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 40, ""wti_thresh"": 0.02, ""train_window"": 756}",2.5903,2.5903,Discard,0.0000 Sharpe vs baseline (2.5903)
+run_012,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.03, ""train_window"": 756}",2.3902,2.3902,Discard,-0.2001 Sharpe vs baseline (2.5903)
+run_013,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.01, ""train_window"": 756}",1.5038,1.5038,Discard,-1.0865 Sharpe vs baseline (2.5903)
+run_014,"{""n_estimators"": 300, ""max_depth"": 2, ""min_samples_leaf"": 22, ""window"": 20, ""wti_thresh"": 0.02, ""train_window"": 504}",1.2833,1.2833,Discard,-1.3070 Sharpe vs baseline (2.5903)
+run_015,"{""n_estimators"": 300, ""max_depth"": 3, ""min_samples_leaf"": 15, ""window"": 10, ""wti_thresh"": 0.02, ""train_window"": 756}",2.401,2.401,Discard,-0.1893 Sharpe vs baseline (2.5903)

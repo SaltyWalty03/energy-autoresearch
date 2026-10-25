@@ -122,3 +122,177 @@ Account equity: $100,166.45
 
 -- Placing orders --
 No actionable signals — staying flat.
+^C^C^C^CC:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+GCS unavailable — proceeding without distributed lock.
+Account equity: $100,024.70
+[XLE] regime=8 (of 13)  bias=0.2270  direction=long  wf_sharpe=-0.948  kelly_f=0.0000
+[XLB] regime=1 (of 2)  bias=-0.1490  direction=short  wf_sharpe=-0.063  kelly_f=0.0000
+[XOP] regime=4 (of 9)  bias=0.0832  direction=long  wf_sharpe=0.764  kelly_f=0.0241
+
+-- Reconciling flat assets --
+  XLE: signal flat — closing long position.
+  Closed existing XLE position.
+
+-- Placing orders --
+  XOP: already long — holding.
+^C^C^C^C^C^C^C^C^C^CC:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+GCS unavailable — proceeding without distributed lock.
+Account equity: $99,501.54
+[XLE] regime=8 (of 13)  bias=0.2286  direction=long  wf_sharpe=-0.948  kelly_f=0.0000
+[XLB] regime=0 (of 2)  bias=0.2710  direction=long  wf_sharpe=0.284  kelly_f=0.0089
+[XOP] regime=0 (of 9)  bias=-0.1109  direction=short  wf_sharpe=-3.688  kelly_f=0.0000
+
+-- Reconciling flat assets --
+  XOP: signal flat — closing long position.
+  Closed existing XOP position.
+
+-- Placing orders --
+  XLB: already long — holding.
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\Final Project\.venv\Lib\site-packages\pandas\core\arraylike.py:402: RuntimeWarning: invalid value encountered in log
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+GCS unavailable — proceeding without distributed lock.
+Account equity: $99,512.46
+[XLE] regime=0 (of 13)  bias=-0.0546  direction=short  wf_sharpe=-0.978  kelly_f=0.0000
+[XLB] regime=1 (of 2)  bias=-0.0610  direction=short  wf_sharpe=-0.063  kelly_f=0.0000
+[XOP] regime=4 (of 9)  bias=0.2066  direction=long  wf_sharpe=0.764  kelly_f=0.0241
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 307, in <module>
+    shares_raw   = int(dollar_alloc / price)
+                       ~~~~~~~~~~~~~^~~~~~~
+ZeroDivisionError: float division by zero
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 423, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 282, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^C^C^C^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^C^C^C^C^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^C^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+^C^C^C^CTraceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'
+Traceback (most recent call last):
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 428, in <module>
+    run_daily(None)
+  File "C:\Users\wpbro\OneDrive\Documents\Stat 303-1\Workspace\energy-autoresearch\run_daily.py", line 287, in run_daily
+    api_key    = os.environ["ALPACA_API_KEY"]
+                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ALPACA_API_KEY'

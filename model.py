@@ -1,4 +1,7 @@
+import logging
+import os
 import time
+import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -14,6 +17,23 @@ except ImportError:
     _XGB_AVAILABLE = False
 
 _CACHE_DIR = Path(__file__).parent / "data" / "model_cache"
+
+log = logging.getLogger(__name__)
+
+# Ordered feature name lists — the source of truth for schema assertions at inference.
+# Append new features here and bump the count; never reorder existing names.
+FEATURE_NAMES_BASE = [
+    "ret_lag", "ret_lag_vol5_adj", "mean5", "mean20", "macd_ratio", "vol_ratio",
+]
+FEATURE_NAMES_EXTENDED = FEATURE_NAMES_BASE + [
+    "wti_lag_ret", "ret_lag_x_temp_anomaly", "ret_lag_x_ng_zscore",
+]
+FEATURE_NAMES_V2 = FEATURE_NAMES_EXTENDED + [
+    "cross_asset_lag_ret", "vol_zscore_5d_60d",
+]
+
+N_BASE_FEATURES     = len(FEATURE_NAMES_BASE)      # 6
+N_EXTENDED_FEATURES = len(FEATURE_NAMES_EXTENDED)  # 9
 
 
 def _load_commodity(ticker: str = "CL=F") -> pd.Series:
@@ -44,10 +64,21 @@ def _load_commodity(ticker: str = "CL=F") -> pd.Series:
         raw = yf.download(ticker, start="2019-01-01", auto_adjust=True, progress=False)
         if isinstance(raw.columns, pd.MultiIndex):
             raw.columns = raw.columns.get_level_values(0)
-        raw[["Close"]].rename(columns={"Close": "close"}).to_parquet(cache_file)
-        return raw["Close"]
-    except Exception:
+    except Exception as exc:
+        log.warning("_load_commodity(%s) download failed — commodity features/shock filter "
+                    "degrade to zeros/off: %s", ticker, exc)
         return pd.Series(dtype=float)
+    if raw.empty or "Close" not in raw:
+        log.warning("_load_commodity(%s): no data returned — commodity features/shock "
+                    "filter degrade to zeros/off.", ticker)
+        return pd.Series(dtype=float)
+    # Cache write is best-effort: a failure (e.g. no pyarrow) must not discard the data.
+    try:
+        raw[["Close"]].rename(columns={"Close": "close"}).to_parquet(cache_file)
+    except Exception as exc:
+        log.warning("_load_commodity(%s): cache write failed (%s) — continuing uncached.",
+                    ticker, exc)
+    return raw["Close"]
 
 
 class DirectionModel(BaseEstimator, RegressorMixin):
@@ -105,35 +136,88 @@ class DirectionModel(BaseEstimator, RegressorMixin):
     def _temp_anomaly(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
         Yesterday's Houston temperature anomaly (temp - 30d rolling mean), shifted 1d.
-        Uses the largest cached OpenMeteo Houston parquet; falls back to zeros.
+        Uses local parquet cache when available; falls back to live OpenMeteo API.
         """
         cache_dir = Path(__file__).parent / "data" / "openmeteo_cache"
         files = sorted(cache_dir.glob("openmeteo_houston_*.parquet"),
                        key=lambda f: f.stat().st_size, reverse=True)
-        if not files:
-            return np.zeros(len(idx))
-        df = pd.read_parquet(files[0])
-        df["date"] = pd.to_datetime(df["date"])
-        temp = df.sort_values("date").set_index("date")["temperature_2m_mean"]
+        if files:
+            df = pd.read_parquet(files[0])
+            df["date"] = pd.to_datetime(df["date"])
+            temp = df.sort_values("date").set_index("date")["temperature_2m_mean"]
+        else:
+            try:
+                start = (idx.min() - pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+                end = idx.max().strftime("%Y-%m-%d")
+                resp = requests.get(
+                    "https://archive-api.open-meteo.com/v1/archive",
+                    params={
+                        "latitude": 29.76, "longitude": -95.37,
+                        "timezone": "America/Chicago",
+                        "start_date": start, "end_date": end,
+                        "daily": "temperature_2m_mean",
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                daily = resp.json()["daily"]
+                temp = pd.Series(
+                    daily["temperature_2m_mean"],
+                    index=pd.to_datetime(daily["time"]),
+                    dtype=float,
+                )
+            except Exception as exc:
+                log.warning("OpenMeteo fetch failed — Temp_Anomaly set to 0: %s", exc)
+                return np.zeros(len(idx))
         rolling_mean = temp.rolling(30, min_periods=15).mean()
-        anomaly = (temp - rolling_mean).shift(1)  # yesterday's anomaly
+        anomaly = (temp - rolling_mean).shift(1)
         return anomaly.reindex(idx, method="ffill").fillna(0.0).values
 
     def _natgas_zscore(self, idx: pd.DatetimeIndex) -> np.ndarray:
         """
-        NatGas storage 20-day rolling z-score (stationarised, lagged 1 period).
-        Uses the largest EIA gas-storage parquet (weekly, ffilled to daily).
-        Falls back to zeros if unavailable.
+        NatGas storage 20-period rolling z-score (stationarised, lagged 1 period).
+        Uses local EIA parquet cache when available; falls back to live EIA API.
+        Requires EIA_API_KEY env var for live fetch.
         """
         eia_dir = Path(__file__).parent / "data" / "eia_cache"
         files = sorted(eia_dir.glob("eia_gas_storage_*.parquet"),
                        key=lambda f: f.stat().st_size, reverse=True)
-        if not files:
-            return np.zeros(len(idx))
-        df = pd.read_parquet(files[0])
-        storage = df.set_index("date")["value"]
-        storage.index = pd.to_datetime(storage.index)
-        storage = storage.sort_index()
+        if files:
+            df = pd.read_parquet(files[0])
+            storage = df.set_index("date")["value"]
+            storage.index = pd.to_datetime(storage.index)
+            storage = storage.sort_index()
+        else:
+            api_key = os.environ.get("EIA_API_KEY", "")
+            if not api_key:
+                log.warning("EIA_API_KEY not set and no local cache — NatGas z-score set to 0.")
+                return np.zeros(len(idx))
+            try:
+                start = (idx.min() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
+                end = idx.max().strftime("%Y-%m-%d")
+                resp = requests.get(
+                    "https://api.eia.gov/v2/natural-gas/stor/wkly/data/",
+                    params={
+                        "api_key": api_key,
+                        "data[]": "value",
+                        "frequency": "weekly",
+                        "start": start, "end": end,
+                        "facets[series][]": "NW2_EPG0_SWO_R48_BCF",
+                        "sort[0][column]": "period",
+                        "sort[0][direction]": "asc",
+                        "length": 200,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                records = resp.json()["response"]["data"]
+                df = pd.DataFrame(records)
+                storage = pd.to_numeric(df["value"], errors="coerce")
+                storage.index = pd.to_datetime(df["period"])
+                storage = storage.sort_index().dropna()
+            except Exception as exc:
+                log.warning("EIA NatGas fetch failed — NatGas z-score set to 0: %s", exc)
+                return np.zeros(len(idx))
         # Forward-fill weekly EIA releases to daily, then z-score
         storage_daily = storage.reindex(idx, method="ffill")
         roll_mean = storage_daily.rolling(20, min_periods=10).mean()
@@ -220,16 +304,35 @@ class DirectionModel(BaseEstimator, RegressorMixin):
                 random_state=42,
             )
         self.clf_.fit(F_s, labels, sample_weight=weights)
+        # Record which feature schema this pickle was built with.
+        if F_s.shape[1] == N_EXTENDED_FEATURES:
+            self.feature_names_ = list(FEATURE_NAMES_EXTENDED)
+        else:
+            self.feature_names_ = list(FEATURE_NAMES_BASE)
         return self
+
+    @property
+    def n_features_(self) -> int:
+        """Feature count this fitted model expects (6 = pre-2026-09-14 pickle, 9 = current)."""
+        return int(self.scaler_.n_features_in_)
 
     def predict(self, X):
         r     = np.concatenate([self._tail, np.array(X).ravel()])
         F     = self._rolling_features(r, len(self._tail))
-        r_val = r[len(self._tail):]
-        wti   = self._wti_lag_ret(X.index)
-        temp  = self._temp_anomaly(X.index)
-        ng    = self._natgas_zscore(X.index)
-        F     = np.column_stack([F, wti, r_val * temp, r_val * ng])
+        # Build the feature set this pickle was fitted on. Older pickles were
+        # trained on the 6 base features; feeding them 9 raises in the scaler.
+        n_expected = self.n_features_
+        if n_expected == N_EXTENDED_FEATURES:
+            r_val = r[len(self._tail):]
+            wti   = self._wti_lag_ret(X.index)
+            temp  = self._temp_anomaly(X.index)
+            ng    = self._natgas_zscore(X.index)
+            F     = np.column_stack([F, wti, r_val * temp, r_val * ng])
+        elif n_expected != N_BASE_FEATURES:
+            raise ValueError(
+                f"DirectionModel fitted on {n_expected} features; predict() can only build "
+                f"{N_BASE_FEATURES} (legacy) or {N_EXTENDED_FEATURES} (extended). Retrain the model."
+            )
         F_s = self.scaler_.transform(F)
         proba = self.clf_.predict_proba(F_s)[:, 1]
         signal = 2 * proba - 1
@@ -244,6 +347,190 @@ class DirectionModel(BaseEstimator, RegressorMixin):
 def build_model():
     return DirectionModel(n_estimators=600, max_depth=2, min_samples_leaf=22,
                           train_window=756, wti_thresh=0.02, model_type="rf")
+
+
+# ---------------------------------------------------------------------------
+# V2 constants
+# ---------------------------------------------------------------------------
+N_V2_FEATURES = 11   # 9 extended + cross_asset_lag_ret + vol_zscore
+
+
+class DirectionModelV2(DirectionModel):
+    """
+    Extends DirectionModel (9 features) with 2 additional cross-asset features
+    for a total of 11 features:
+
+    10. Cross-asset lag return  (_cross_asset_lag_ret): lag-1 log return of a
+        peer equity ticker (e.g. XOP when predicting XLE).
+    11. 5-day realised-vol z-score  (_vol_zscore): 5-day vol relative to its
+        own 60-day rolling mean/std, lagged 1 period (no look-ahead).
+
+    Both features are available before 14:00 UTC on the trade date because
+    they rely exclusively on prior-day data.
+    """
+
+    def __init__(self, window=20, n_estimators=300, max_depth=2,
+                 min_samples_leaf=22, train_window=756, wti_thresh=0.02,
+                 model_type="rf", learning_rate=0.05, subsample=0.8,
+                 colsample_bytree=0.8, commodity_ticker="CL=F",
+                 cross_asset_ticker="XOP"):
+        super().__init__(
+            window=window, n_estimators=n_estimators, max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf, train_window=train_window,
+            wti_thresh=wti_thresh, model_type=model_type,
+            learning_rate=learning_rate, subsample=subsample,
+            colsample_bytree=colsample_bytree,
+            commodity_ticker=commodity_ticker,
+        )
+        self.cross_asset_ticker = cross_asset_ticker
+
+    # ------------------------------------------------------------------
+    # Cross-asset helpers
+    # ------------------------------------------------------------------
+
+    def _cross_asset_lag_ret(self, ticker: str, idx: pd.DatetimeIndex) -> np.ndarray:
+        """Lag-1 log return of *ticker* aligned to *idx*. Cached identically
+        to _load_commodity.  Returns zeros on any fetch failure."""
+        prices = _load_commodity(ticker)
+        if len(prices) == 0:
+            return np.zeros(len(idx))
+        ret = np.log(prices.clip(lower=1e-8)).diff(1).shift(1)
+        return ret.reindex(idx, method="ffill").fillna(0.0).values
+
+    def _vol_zscore(self, r: np.ndarray, idx: pd.DatetimeIndex) -> np.ndarray:
+        """5-day realised-vol z-score (lag-1) relative to 60-day rolling
+        mean/std of 5-day vol.  Computed from *r* (the ret_lag series, already
+        lagged by prepare.py) — no external fetch, no look-ahead.
+
+        Returns a 1-D float64 array of length ``len(r)``.
+        """
+        r_s = pd.Series(r, index=idx, dtype=float)
+        vol5 = r_s.rolling(5, min_periods=3).std()
+        roll_mean = vol5.rolling(60, min_periods=20).mean()
+        roll_std  = vol5.rolling(60, min_periods=20).std() + 1e-8
+        zs = ((vol5 - roll_mean) / roll_std).shift(1)
+        return zs.fillna(0.0).values
+
+    # ------------------------------------------------------------------
+    # fit / predict overrides
+    # ------------------------------------------------------------------
+
+    def fit(self, X, y):
+        # Step 1 — build the 9-feature base (sets self.scaler_, self.clf_,
+        # self._tail, etc. from the parent class).
+        super().fit(X, y)
+
+        # Step 2 — re-fit scaler + classifier on the 12-feature matrix.
+        r_full = np.array(X).ravel()
+        y_full = np.array(y)
+        n_full = len(r_full)
+
+        cutoff = max(0, n_full - self.train_window)
+        r      = r_full[cutoff:]
+        y_w    = y_full[cutoff:]
+
+        # Exponential decay weights (same formula as parent)
+        weights = np.exp(np.linspace(-0.3, 0.0, n_full))[cutoff:]
+
+        # Re-build the 9-feature matrix (parent already did this internally,
+        # but we need it here to append the two new columns).
+        F9       = self._rolling_features(r, 0)
+        wti_full = self._wti_lag_ret(X.index)
+        wti_win  = wti_full[cutoff:]
+        temp_full = self._temp_anomaly(X.index)
+        temp_win  = temp_full[cutoff:]
+        ng_full  = self._natgas_zscore(X.index)
+        ng_win   = ng_full[cutoff:]
+        F9       = np.column_stack([
+            F9, wti_win, r * temp_win, r * ng_win,
+        ])
+
+        # New feature 10: cross-asset lag return
+        ca_full = self._cross_asset_lag_ret(self.cross_asset_ticker, X.index)
+        ca_win  = ca_full[cutoff:]
+
+        # New feature 11: vol z-score (computed on full r_full for enough
+        # history, then trimmed to the training window).
+        vz_full = self._vol_zscore(r_full, X.index)
+        vz_win  = vz_full[cutoff:]
+
+        # Store the tail of the vol-zscore series for predict() continuity
+        self._cross_tail = vz_full[-self.window:]
+
+        F12 = np.column_stack([F9, ca_win, vz_win])
+
+        labels = (y_w > 0).astype(int)
+
+        self.scaler_ = StandardScaler()
+        F12_s = self.scaler_.fit_transform(F12)
+
+        if self.model_type == "xgb":
+            if not _XGB_AVAILABLE:
+                raise ImportError("xgboost is not installed. Run: pip install xgboost")
+            self.clf_ = xgb.XGBClassifier(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                learning_rate=self.learning_rate,
+                subsample=self.subsample,
+                colsample_bytree=self.colsample_bytree,
+                eval_metric="logloss",
+                random_state=42,
+                verbosity=0,
+            )
+        else:
+            self.clf_ = RandomForestClassifier(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                min_samples_leaf=self.min_samples_leaf,
+                max_features="sqrt",
+                random_state=42,
+            )
+        self.clf_.fit(F12_s, labels, sample_weight=weights)
+        return self
+
+    def predict(self, X):
+        n_expected = self.n_features_
+
+        if n_expected == N_V2_FEATURES:
+            # Build 12-feature matrix
+            r_base = np.concatenate([self._tail, np.array(X).ravel()])
+            F      = self._rolling_features(r_base, len(self._tail))
+
+            r_val  = r_base[len(self._tail):]
+            wti    = self._wti_lag_ret(X.index)
+            temp   = self._temp_anomaly(X.index)
+            ng     = self._natgas_zscore(X.index)
+
+            # Cross-asset lag return
+            ca = self._cross_asset_lag_ret(self.cross_asset_ticker, X.index)
+
+            # Vol z-score: prepend _cross_tail for rolling continuity
+            r_for_vz = np.concatenate([self._cross_tail, r_val])
+            # Build a synthetic index long enough to align correctly
+            idx_ext = pd.date_range(end=X.index[-1], periods=len(r_for_vz), freq="B")
+            vz_full = self._vol_zscore(r_for_vz, idx_ext)
+            vz      = vz_full[len(self._cross_tail):]
+
+            F = np.column_stack([F, wti, r_val * temp, r_val * ng, ca, vz])
+
+            F_s    = self.scaler_.transform(F)
+            proba  = self.clf_.predict_proba(F_s)[:, 1]
+            signal = 2 * proba - 1
+
+            shock        = self._commodity_shock_mask(X.index)
+            signal[shock] = 0.0
+            return signal
+
+        # Fall through to parent for 9-feature or 6-feature (legacy) paths
+        return super().predict(X)
+
+
+def build_model_v2(cross_asset_ticker: str = "XOP") -> "DirectionModelV2":
+    return DirectionModelV2(
+        n_estimators=600, max_depth=2, min_samples_leaf=22,
+        train_window=756, wti_thresh=0.02, model_type="rf",
+        cross_asset_ticker=cross_asset_ticker,
+    )
 
 
 def build_feature_matrix(returns: np.ndarray) -> np.ndarray:

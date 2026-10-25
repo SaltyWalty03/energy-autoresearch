@@ -63,8 +63,8 @@ BAR_INTERVAL    = TimeFrame(5, TimeFrameUnit.Minute)
 LOOKBACK_BARS   = 60          # 5-min bars to fetch (covers RSI + MACD warmup)
 RSI_OVERSOLD    = 35          # intraday entry threshold (long)
 RSI_OVERBOUGHT  = 65          # intraday entry threshold (short)
-MODEL_THRESH    = 0.05        # |bias| below this → model says flat, no trades
-MAX_SHARES      = 50
+MODEL_THRESH               = 0.05   # |bias| below this → model says flat, no trades
+MAX_PORTFOLIO_EXPOSURE_PCT = 0.80   # fraction of equity for this single-asset position
 POLL_SECONDS    = 300         # re-evaluate every 5 minutes
 ET              = pytz.timezone("America/New_York")
 MARKET_OPEN     = (9, 30)
@@ -200,24 +200,42 @@ def _release_lock(gcs):
         pass
 
 
-# ── Kelly sizing ──────────────────────────────────────────────────────────────
+# ── Position sizing (swap body here to change weighting scheme) ────────────────
 
-def _kelly_shares(bias: float, equity: float, price: float) -> tuple[float, int]:
+def _compute_position_size(
+    equity: float,
+    price: float,
+    buying_power: float,
+    *,
+    max_exposure: float = MAX_PORTFOLIO_EXPOSURE_PCT,
+    num_positions: int = 1,
+) -> int:
     """
-    Half-Kelly sizing from live account equity.
+    Equal-weight allocation. Single-asset bot always has num_positions=1.
 
-    kelly_f      = abs(bias) * 0.5   (bias is model signal in [-1, 1])
-    dollar_alloc = kelly_f * equity
-    shares       = min(int(dollar_alloc / price), MAX_SHARES)
+    Formula
+    -------
+        per_position_notional = max_exposure * equity / num_positions
+        safe_notional         = min(per_position_notional, buying_power)
+        shares                = int(safe_notional / price)
 
-    The non-XLE portion of equity stays in cash — no bond leg is traded.
+    The buying_power clamp enforces the 80 % cap against Alpaca's live account
+    state before every order, not just at signal-generation time.
+
+    To swap to inverse-volatility weighting later, replace this function body
+    while keeping the signature unchanged — order-execution code is untouched.
     """
-    kelly_f      = abs(bias) * 0.5
-    dollar_alloc = kelly_f * equity
-    shares       = min(int(dollar_alloc / price), MAX_SHARES)
-    log.info("Kelly: bias=%.4f  kelly_f=%.3f  equity=$%.2f  alloc=$%.2f  shares=%d",
-             bias, kelly_f, equity, dollar_alloc, shares)
-    return kelly_f, shares
+    if price <= 0:
+        return 0
+    raw_notional  = max_exposure * equity / num_positions
+    safe_notional = min(raw_notional, max(0.0, buying_power))
+    shares        = int(safe_notional / price)
+    log.info(
+        "Sizing: equity=$%.2f  exposure=%.0f%%  raw_notional=$%.2f  "
+        "buying_power=$%.2f  safe_notional=$%.2f  shares=%d",
+        equity, max_exposure * 100, raw_notional, buying_power, safe_notional, shares,
+    )
+    return shares
 
 
 # ── Market hours ──────────────────────────────────────────────────────────────
@@ -434,10 +452,11 @@ def run():
             direction, rsi, hist = _intraday_signal(df, _allowed_bias)
             current              = _current_position(trade_client)
 
-            # ── Half-Kelly sizing from live equity ────────────────────────────
-            account = trade_client.get_account()
-            equity  = float(account.equity)
-            _, target_shares = _kelly_shares(_bias, equity, latest_price)
+            # ── Equal-weight sizing from live equity + buying-power guard ────────
+            account       = trade_client.get_account()
+            equity        = float(account.equity)
+            buying_power  = float(account.buying_power)
+            target_shares = _compute_position_size(equity, latest_price, buying_power)
 
             log.info(
                 "Price=$%.2f  RSI=%.1f  MACDh=%.4f  ModelBias=%s(%.3f)  Signal=%s  Position=%s",

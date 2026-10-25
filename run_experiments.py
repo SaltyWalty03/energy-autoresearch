@@ -23,11 +23,13 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 from prepare import load_and_split_data, evaluate
+from prepare import walk_forward_sharpe as prep_walk_forward_sharpe
 from model import DirectionModel, build_feature_matrix
 
 # ── Load data once ────────────────────────────────────────────────────────────
 print("Loading XLE data from yfinance (once)...")
 train, val = load_and_split_data()
+full_data  = pd.concat([train, val])
 X_train, y_train = train[["ret_lag"]], train["target"]
 X_val,   y_val   = val[["ret_lag"]],   val["target"]
 print(f"  Train: {len(train)} rows  |  Val: {len(val)} rows")
@@ -75,46 +77,54 @@ EXPERIMENT_GRID = [
 ]
 
 # ── Run experiments ───────────────────────────────────────────────────────────
-log_rows       = []
-traj_data      = {}    # run_id -> (desc, [sharpe_values])
-baseline_sharpe = None
+log_rows        = []
+traj_data       = {}    # run_id -> (desc, [sharpe_values])
+baseline_wf     = None  # walk-forward Sharpe mean of run_001 (primary criterion)
+baseline_sharpe = None  # val Sharpe of run_001 (kept for trajectory chart)
 
 for run_id, desc, kwargs in EXPERIMENT_GRID:
     print(f"\n[{run_id}] {desc}")
     try:
+        # Val Sharpe (single holdout — kept for trajectory chart only)
         m = DirectionModel(**kwargs)
         m.fit(X_train, y_train)
         preds = m.predict(X_val)
         s     = compute_sharpe(y_val, preds)
 
+        # Walk-forward Sharpe (primary selection criterion)
+        wf_mean, wf_std = prep_walk_forward_sharpe(full_data, DirectionModel(**kwargs), n_folds=4)
+
         if run_id == "run_001":
+            baseline_wf     = wf_mean
             baseline_sharpe = s
 
         if run_id == "run_001":
             status = "Keep"
-            notes  = "reference baseline"
-        elif s > baseline_sharpe:
+            notes  = f"reference baseline  wf={wf_mean:.4f}"
+        elif wf_mean > baseline_wf:
             status = "Keep"
-            delta  = s - baseline_sharpe
-            notes  = f"+{delta:.4f} Sharpe over baseline"
+            delta  = wf_mean - baseline_wf
+            notes  = f"+{delta:.4f} WF Sharpe over baseline (val={s:.4f})"
         else:
             status = "Discard"
-            delta  = s - baseline_sharpe
-            notes  = f"{delta:.4f} Sharpe vs baseline ({baseline_sharpe:.4f})"
+            delta  = wf_mean - baseline_wf
+            notes  = f"{delta:.4f} WF Sharpe vs baseline {baseline_wf:.4f} (val={s:.4f})"
 
         if status == "Keep":
             traj = walk_forward_sharpe(m, X_val, y_val)
             traj_data[run_id] = (desc, traj)
 
-        print(f"  Sharpe={s}  Status={status}")
+        print(f"  ValSharpe={s}  WF_mean={wf_mean:.4f}  WF_std={wf_std:.4f}  Status={status}")
         log_rows.append(dict(run_id=run_id, config=json.dumps(kwargs),
-                             final_metric=s, best_metric=s,
+                             final_metric=wf_mean, best_metric=wf_mean,
+                             val_sharpe=s, wf_sharpe_mean=wf_mean, wf_sharpe_std=wf_std,
                              status=status, notes=notes))
 
     except Exception as e:
         print(f"  CRASH: {e}")
         log_rows.append(dict(run_id=run_id, config=json.dumps(kwargs),
                              final_metric=None, best_metric=None,
+                             val_sharpe=None, wf_sharpe_mean=None, wf_sharpe_std=None,
                              status="Crash", notes=str(e)[:200]))
 
 # ── 1. experiment_log.csv ─────────────────────────────────────────────────────
@@ -122,15 +132,16 @@ df_log = pd.DataFrame(log_rows)
 df_log.to_csv(HERE / "experiment_log.csv", index=False)
 print("\n[v] experiment_log.csv written")
 
-# ── Identify best ─────────────────────────────────────────────────────────────
+# ── Identify best (ranked by WF Sharpe mean) ──────────────────────────────────
 kept      = df_log[df_log["status"] == "Keep"].copy()
-kept["final_metric"] = kept["final_metric"].astype(float)
-best_row  = kept.loc[kept["final_metric"].idxmax()]
+kept["wf_sharpe_mean"] = kept["wf_sharpe_mean"].astype(float)
+best_row  = kept.loc[kept["wf_sharpe_mean"].idxmax()]
 best_id   = best_row["run_id"]
-best_s    = float(best_row["final_metric"])
+best_s    = float(best_row["val_sharpe"])   # for chart labels
+best_wf   = float(best_row["wf_sharpe_mean"])
 best_cfg  = json.loads(best_row["config"])
 desc_map  = {r: d for r, d, _ in EXPERIMENT_GRID}
-print(f"Best run: {best_id}  Sharpe={best_s}")
+print(f"Best run: {best_id}  ValSharpe={best_s}  WF_mean={best_wf}")
 
 # ── 2. metric_trajectory.png ─────────────────────────────────────────────────
 MIN_PTS = 30
@@ -162,21 +173,23 @@ print("[v] metric_trajectory.png written")
 lines = [
     "# Keep / Discard / Crash Summary\n",
     f"Baseline Sharpe (run_001): **{baseline_sharpe:.4f}**\n",
-    "| run_id | description | status | sharpe | notes |",
-    "|--------|-------------|--------|--------|-------|",
+    "| run_id | description | status | wf_sharpe_mean | val_sharpe | notes |",
+    "|--------|-------------|--------|----------------|------------|-------|",
 ]
 for _, row in df_log.iterrows():
-    s_str = f"{float(row['final_metric']):.4f}" if row["final_metric"] is not None else "N/A"
+    wf_str = f"{float(row['wf_sharpe_mean']):.4f}" if row["wf_sharpe_mean"] is not None else "N/A"
+    v_str  = f"{float(row['val_sharpe']):.4f}"     if row["val_sharpe"]     is not None else "N/A"
     lines.append(
-        f"| {row['run_id']} | {desc_map[row['run_id']]} | **{row['status']}** | {s_str} | {row['notes']} |"
+        f"| {row['run_id']} | {desc_map[row['run_id']]} | **{row['status']}** | {wf_str} | {v_str} | {row['notes']} |"
     )
 Path(HERE / "keep_discard_crash_summary.md").write_text("\n".join(lines), encoding="utf-8")
 print("[v] keep_discard_crash_summary.md written")
 
 # ── 4. best_vs_baseline.md ───────────────────────────────────────────────────
 baseline_cfg = json.loads(df_log.loc[df_log["run_id"] == "run_001", "config"].iloc[0])
-delta        = best_s - baseline_sharpe
-pct          = (delta / abs(baseline_sharpe)) * 100 if baseline_sharpe else float("nan")
+baseline_wf_val = float(df_log.loc[df_log["run_id"] == "run_001", "wf_sharpe_mean"].iloc[0])
+delta        = best_wf - baseline_wf_val
+pct          = (delta / abs(baseline_wf_val)) * 100 if baseline_wf_val else float("nan")
 
 diff_lines = []
 for k in sorted(set(baseline_cfg) | set(best_cfg)):
@@ -191,10 +204,11 @@ bvb = f"""# Best Run vs. Baseline
 - **Baseline**: run_001 — {desc_map['run_001']}
 - **Best**:     {best_id} — {desc_map[best_id]}
 
-## Metric Comparison
+## Metric Comparison (primary: walk-forward Sharpe)
 | metric | baseline | best run | delta | % change |
 |--------|----------|----------|-------|----------|
-| Sharpe (annualised) | {baseline_sharpe:.4f} | {best_s:.4f} | {delta:+.4f} | {pct:+.2f}% |
+| WF Sharpe mean (4-fold) | {baseline_wf_val:.4f} | {best_wf:.4f} | {delta:+.4f} | {pct:+.2f}% |
+| Val Sharpe (holdout) | {baseline_sharpe:.4f} | {best_s:.4f} | {best_s - baseline_sharpe:+.4f} | — |
 
 ## Hyperparameter Diff (baseline → best)
 | parameter | baseline | best run |
@@ -202,15 +216,15 @@ bvb = f"""# Best Run vs. Baseline
 {chr(10).join(diff_lines)}
 
 ## Summary
-The best configuration ({best_id}: {desc_map[best_id]}) improved Sharpe by
-**{delta:+.4f}** ({pct:+.2f}%) relative to the baseline.
+The best configuration ({best_id}: {desc_map[best_id]}) improved walk-forward Sharpe by
+**{delta:+.4f}** ({pct:+.2f}%) relative to the baseline (selection criterion is WF Sharpe, not holdout).
 {"This is a meaningful gain in risk-adjusted return." if abs(delta) > 0.05 else "The gain is modest, suggesting the baseline is already well-tuned for this dataset."}
 """
 Path(HERE / "best_vs_baseline.md").write_text(bvb, encoding="utf-8")
 print("[v] best_vs_baseline.md written")
 
 # ── 5. what_actually_worked.md ────────────────────────────────────────────────
-kept_df    = df_log[df_log["status"] == "Keep"].sort_values("final_metric", ascending=False)
+kept_df    = df_log[df_log["status"] == "Keep"].sort_values("wf_sharpe_mean", ascending=False)
 discard_df = df_log[df_log["status"] == "Discard"]
 crash_df   = df_log[df_log["status"] == "Crash"]
 

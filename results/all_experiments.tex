@@ -1,0 +1,144 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.75in, top=0.65in, bottom=0.65in]{geometry}
+\usepackage{times}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{colortbl}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{caption}
+\usepackage{array}
+\renewcommand{\arraystretch}{1.08}
+\setlength{\LTpre}{4pt}
+\setlength{\LTpost}{4pt}
+
+\title{\textbf{Complete Experiment Log}\\
+\large XLE Energy ETF Direction Model\\
+\normalsize All Sessions --- 74 Experiments}
+\author{energy-autoresearch}
+\date{May 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\noindent\textbf{Dataset:} XLE (Yahoo Finance, 2020-01-01 onward), 80/20 chronological split.
+\textbf{Metric:} Annualised Sharpe $= \sqrt{252}\cdot\mathbb{E}[\mathrm{sign}(\hat{s})\cdot r_t]/$std$(\cdot)$.
+WF~Sharpe is mean walk-forward Sharpe over expanding folds (``---'' = not computed).
+Status: \textbf{best} = best committed model; keep = improved over prior; --- = discarded.
+Sessions: Det-S1 = alternative-data experiments (Apr~20); S1--S3 = autoresearch loop;
+Sweep = HP grid; Post = post-cleanup; Ablation = structured Phase~2 ablations.
+
+\begin{longtable}{>{\ttfamily\footnotesize}p{1.1cm}>{\footnotesize}p{0.7cm}>{\footnotesize}p{0.9cm}>{\footnotesize\raggedright}p{4.6cm}>{\footnotesize}p{1.5cm}>{\footnotesize\centering}p{0.45cm}>{\footnotesize\centering}p{0.35cm}>{\footnotesize\centering}p{0.35cm}>{\footnotesize\centering}p{0.6cm}>{\footnotesize\centering}p{0.5cm}>{\footnotesize\raggedleft}p{0.85cm}>{\footnotesize\raggedleft}p{0.75cm}>{\footnotesize}p{1.1cm}}
+\caption{Complete experiment log. TW = train window (trading days); WTI = shock filter threshold; Val~$S$ = validation Sharpe; WF~$S$ = walk-forward Sharpe.}
+\label{tab:all_experiments}\\
+\toprule
+\textbf{Run ID} & \textbf{Sess.} & \textbf{Date} & \textbf{Description} & \textbf{Model} & $n$ & $d$ & msl & TW & WTI & \textbf{Val $S$} & \textbf{WF $S$} & \textbf{Status} \\
+\midrule
+\endfirsthead
+\multicolumn{13}{l}{\small\textit{Table continued from previous page}} \\
+\toprule
+\textbf{Run ID} & \textbf{Sess.} & \textbf{Date} & \textbf{Description} & \textbf{Model} & $n$ & $d$ & msl & TW & WTI & \textbf{Val $S$} & \textbf{WF $S$} & \textbf{Status} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{13}{r}{\small\textit{Continued on next page}} \\
+\endfoot
+\bottomrule
+\endlastfoot
+\multicolumn{13}{l}{\cellcolor[gray]{0.80}\small\textbf{Det-S1}} \\
+\rowcolor[gray]{0.93}det\_001 & Det-S1 & 2026-04-20 & OLS on 24 alternative-data features & \texttt{OLS (statsmodels)} & --- & --- & --- & full & --- & -0.7390 & --- & ref \\
+\rowcolor[gray]{0.93}det\_002 & Det-S1 & 2026-04-20 & OLS selected+engineered (10 features, trend/lag) & \texttt{OLS (selected)} & --- & --- & --- & full & --- & 0.0390 & --- & --- \\
+\rowcolor[gray]{0.93}det\_003 & Det-S1 & 2026-04-20 & Ridge / Lasso with cross-validated alpha & \texttt{Ridge/Lasso} & --- & --- & --- & full & --- & 0.6130 & --- & keep \\
+\rowcolor[gray]{0.93}det\_004 & Det-S1 & 2026-04-20 & RandomForest n=300, d=4, msl=15 (regressor) & \texttt{RF Regressor} & 300 & 4 & 15 & full & --- & -0.7050 & --- & --- \\
+\rowcolor[gray]{0.93}det\_006 & Det-S1 & 2026-04-20 & Lasso + signal threshold sweep; 5-fold walk-forward & \texttt{Lasso+threshold} & --- & --- & --- & full & --- & 0.6130 & -0.2405 & keep \\
+\rowcolor[gray]{0.93}det\_007 & Det-S1 & 2026-04-20 & Signal audit: 15 non-financial signals individually & \texttt{Individual signals} & --- & --- & --- & full & --- & 1.6870 & --- & keep \\
+\rowcolor[gray]{0.93}det\_008 & Det-S1 & 2026-04-20 & Normalised signal composite (EW + OLS-weighted) & \texttt{Signal composite} & --- & --- & --- & full & --- & 0.6630 & --- & keep \\
+\rowcolor[gray]{0.93}det\_009 & Det-S1 & 2026-04-20 & Lasso fine alpha grid (40-pt, 1e-5 to 0.1) on top signals & \texttt{Lasso (fine grid)} & --- & --- & --- & full & --- & 0.6130 & --- & keep \\
+\rowcolor[gray]{0.93}det\_010 & Det-S1 & 2026-04-20 & Walk-forward: best signal + Lasso ensemble (5-fold) & \texttt{Signal+Lasso WF} & --- & --- & --- & full & --- & 1.0420 & 0.5733 & keep \\
+\multicolumn{13}{l}{\cellcolor[gray]{0.80}\small\textbf{S1}} \\
+\rowcolor[gray]{0.97}tsv\_002 & S1 & 2026-04-16 & Pre-session smoke test & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.8347 & --- & smoke \\
+\rowcolor[gray]{0.97}tsv\_003 & S1 & 2026-04-16 & Pre-session smoke test & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.8347 & --- & smoke \\
+\rowcolor[gray]{0.97}tsv\_004 & S1 & 2026-04-18 & LinearRegression baseline & \texttt{LinearRegression} & --- & --- & --- & 756 & --- & 0.8584 & --- & ref \\
+\rowcolor[gray]{0.97}tsv\_005 & S1 & 2026-04-18 & RF: RetFeatures + Ridge & \texttt{Ridge} & --- & --- & --- & 756 & --- & 0.0653 & --- & --- \\
+\rowcolor[gray]{0.97}tsv\_006 & S1 & 2026-04-18 & GradientBoostingRegressor & \texttt{GradientBoosting} & --- & --- & --- & 756 & --- & 0.1524 & --- & --- \\
+\rowcolor[gray]{0.97}tsv\_007 & S1 & 2026-04-18 & Rolling z/RSI/vol + Ridge & \texttt{Ridge} & --- & --- & --- & 756 & --- & 0.4703 & --- & --- \\
+\rowcolor[gray]{0.97}tsv\_008 & S1 & 2026-04-18 & Rolling feat + LogisticReg & \texttt{LogisticReg} & --- & --- & --- & 756 & --- & 0.9581 & --- & keep \\
+\rowcolor[gray]{0.97}tsv\_009 & S1 & 2026-04-18 & LogReg + lag2/lag3/MACD/RSI & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.8824 & --- & --- \\
+\rowcolor[gray]{0.97}tsv\_010 & S1 & 2026-04-18 & RF depth=3, msl=30 & \texttt{RandomForest} & --- & 3 & 30 & 756 & --- & 1.2623 & --- & keep \\
+\rowcolor[gray]{0.97}tsv\_011 & S1 & 2026-04-18 & RF d=2, msl=25, sqrt, n=200 & \texttt{RandomForest} & 200 & 2 & 25 & 756 & --- & 1.3092 & --- & keep \\
+\rowcolor[gray]{0.97}tsv\_012 & S1 & 2026-04-18 & MLPClassifier (128,) alpha=1 & \texttt{MLPClassifier} & --- & --- & --- & 756 & --- & 1.1365 & --- & --- \\
+\rowcolor[gray]{0.97}tsv\_013 & S1 & 2026-04-18 & RF n=300, d=2, msl=20 & \texttt{RandomForest} & 300 & 2 & 20 & 756 & --- & 1.3717 & --- & keep \\
+\rowcolor[gray]{0.97}tsv\_014 & S1 & 2026-04-18 & RF n=200, d=2, msl=22 & \texttt{RandomForest} & 200 & 2 & 22 & 756 & --- & 1.3954 & --- & \textbf{best-S1} \\
+\rowcolor[gray]{0.97}tsv\_015 & S1 & 2026-04-18 & Direct Sharpe optimizer (tanh) & \texttt{SharpeOptimizer} & --- & --- & --- & 756 & --- & 0.0267 & --- & --- \\
+\rowcolor[gray]{0.97}tsv\_016 & S1 & 2026-04-18 & Restored RF n=200, d=2, msl=22 & \texttt{RandomForest} & 200 & 2 & 22 & 756 & --- & 1.3954 & --- & keep \\
+\rowcolor[gray]{0.97}tsv\_001 & S1 & ÿþ2026-04- & Pre-session smoke test & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.8220 & --- & smoke \\
+\multicolumn{13}{l}{\cellcolor[gray]{0.80}\small\textbf{S2}} \\
+\rowcolor[gray]{0.93}tsv\_017 & S2 & 2026-04-25 & Session 2 start & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.1685 & --- & smoke \\
+\rowcolor[gray]{0.93}tsv\_018 & S2 & 2026-04-25 & S2 intermediate & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.7420 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_019 & S2 & 2026-04-25 & S2 intermediate & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.7372 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_020 & S2 & 2026-04-25 & S2 intermediate (+roll window) & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.8278 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_021 & S2 & 2026-04-25 & WTI shock filter thresh=3\% & \texttt{RandomForest} & --- & --- & --- & 756 & 3\% & 2.0219 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_022 & S2 & 2026-04-25 & WTI shock filter thresh=2\% & \texttt{RandomForest} & --- & --- & --- & 756 & 2\% & 2.2119 & --- & \textbf{best} \\
+\rowcolor[gray]{0.93}tsv\_023 & S2 & 2026-04-25 & WTI shock filter thresh=1.5\% & \texttt{RandomForest} & --- & --- & --- & 756 & 2\% & 2.0065 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_024 & S2 & 2026-04-25 & WTI ret1+mom5 as RF inputs & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.3403 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_025 & S2 & 2026-04-25 & Contrarian signal on shock days & \texttt{SignalComposite} & --- & --- & --- & 756 & --- & 1.9532 & --- & --- \\
+\multicolumn{13}{l}{\cellcolor[gray]{0.80}\small\textbf{Sweep}} \\
+\rowcolor[gray]{0.97}run\_001 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=22, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 2 & 22 & 756 & 2\% & 2.5903 & --- & keep \\
+\rowcolor[gray]{0.97}run\_002 & Sweep & 2026-04-25 & HP sweep: n=300, d=3, msl=22, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 3 & 22 & 756 & 2\% & 2.5941 & --- & keep \\
+\rowcolor[gray]{0.97}run\_003 & Sweep & 2026-04-25 & HP sweep: n=300, d=4, msl=22, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 4 & 22 & 756 & 2\% & 2.0454 & --- & --- \\
+\rowcolor[gray]{0.97}run\_004 & Sweep & 2026-04-25 & HP sweep: n=300, d=1, msl=22, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 1 & 22 & 756 & 2\% & 0.7120 & --- & --- \\
+\rowcolor[gray]{0.97}run\_005 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=10, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 2 & 10 & 756 & 2\% & 2.6104 & --- & keep \\
+\rowcolor[gray]{0.97}run\_006 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=50, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 2 & 50 & 756 & 2\% & 1.7419 & --- & --- \\
+\rowcolor[gray]{0.97}run\_007 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=100, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 2 & 100 & 756 & 2\% & 1.8515 & --- & --- \\
+\rowcolor[gray]{0.97}run\_008 & Sweep & 2026-04-25 & HP sweep: n=100, d=2, msl=22, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 100 & 2 & 22 & 756 & 2\% & 2.5363 & --- & --- \\
+\rowcolor[gray]{0.97}run\_009 & Sweep & 2026-04-25 & HP sweep: n=600, d=2, msl=22, win=20, wti=0.02, tw=756 & \texttt{RandomForest} & 600 & 2 & 22 & 756 & 2\% & 2.5990 & --- & keep \\
+\rowcolor[gray]{0.97}run\_010 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=22, win=10, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 2 & 22 & 756 & 2\% & 2.5903 & --- & --- \\
+\rowcolor[gray]{0.97}run\_011 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=22, win=40, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 2 & 22 & 756 & 2\% & 2.5903 & --- & --- \\
+\rowcolor[gray]{0.97}run\_012 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=22, win=20, wti=0.03, tw=756 & \texttt{RandomForest} & 300 & 2 & 22 & 756 & 3\% & 2.3902 & --- & --- \\
+\rowcolor[gray]{0.97}run\_013 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=22, win=20, wti=0.01, tw=756 & \texttt{RandomForest} & 300 & 2 & 22 & 756 & 1\% & 1.5038 & --- & --- \\
+\rowcolor[gray]{0.97}run\_014 & Sweep & 2026-04-25 & HP sweep: n=300, d=2, msl=22, win=20, wti=0.02, tw=504 & \texttt{RandomForest} & 300 & 2 & 22 & 504 & 2\% & 1.2833 & --- & --- \\
+\rowcolor[gray]{0.97}run\_015 & Sweep & 2026-04-25 & HP sweep: n=300, d=3, msl=15, win=10, wti=0.02, tw=756 & \texttt{RandomForest} & 300 & 3 & 15 & 756 & 2\% & 2.4010 & --- & --- \\
+\multicolumn{13}{l}{\cellcolor[gray]{0.80}\small\textbf{S3}} \\
+\rowcolor[gray]{0.93}tsv\_026 & S3 & 2026-04-30 & S3 early probe & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.7453 & --- & smoke \\
+\rowcolor[gray]{0.93}tsv\_027 & S3 & 2026-05-06 & S3 early probe & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.6544 & --- & smoke \\
+\rowcolor[gray]{0.93}tsv\_028 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.0925 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_029 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.9338 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_030 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.6980 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_031 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.3099 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_032 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.7485 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_033 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.9362 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_034 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.7698 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_035 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.6660 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_036 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.5416 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_037 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.7753 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_038 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.1332 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_039 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.0365 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_040 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.1316 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_041 & S3 & 2026-05-07 & S3 peak: msl tune & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.1982 & --- & \textbf{best-S3} \\
+\rowcolor[gray]{0.93}tsv\_042 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.9865 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_043 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.0790 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_044 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 1.0358 & --- & --- \\
+\rowcolor[gray]{0.93}tsv\_045 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.1776 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_046 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.1563 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_047 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.0418 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_048 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.0526 & --- & keep \\
+\rowcolor[gray]{0.93}tsv\_049 & S3 & 2026-05-07 & S3 run & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 0.4453 & --- & --- \\
+\multicolumn{13}{l}{\cellcolor[gray]{0.80}\small\textbf{Post}} \\
+\rowcolor[gray]{0.97}tsv\_050 & Post & 2026-05-18 & Post-cleanup smoke test & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.5903 & --- & smoke \\
+\rowcolor[gray]{0.97}tsv\_051 & Post & 2026-05-18 & XGBoost baseline & \texttt{XGBoost} & --- & --- & --- & 756 & --- & 0.5408 & -0.3981 & --- \\
+\rowcolor[gray]{0.97}tsv\_052 & Post & 2026-05-18 & XGBoost d=2, n=800 & \texttt{XGBoost} & 800 & 2 & --- & 756 & --- & 0.2908 & -0.6807 & --- \\
+\rowcolor[gray]{0.97}tsv\_053 & Post & 2026-05-18 & RF baseline + walk-forward & \texttt{RandomForest} & --- & --- & --- & 756 & --- & 2.5949 & 0.3226 & keep \\
+\multicolumn{13}{l}{\cellcolor[gray]{0.80}\small\textbf{Ablation}} \\
+\rowcolor[gray]{0.90}exp\_001 & Ablation & 2026-05-27 & Baseline: LinearRegression on ret\_lag only & \texttt{LinearRegression} & --- & --- & --- & --- & --- & 0.5932 & 0.0000 & ablation \\
+\rowcolor[gray]{0.90}exp\_002 & Ablation & 2026-05-27 & RF direction classifier — Session 1 best (n=200, depth=2, msl=22, no shock filter) & \texttt{RandomForest} & 200 & 2 & 22 & 756 & 9900\% & 1.8282 & 0.3370 & ablation \\
+\rowcolor[gray]{0.90}exp\_003 & Ablation & 2026-05-27 & RF sweep baseline (n=300, depth=2, msl=22, wti\_thresh=2\%) & \texttt{RandomForest} & 300 & 2 & 22 & 756 & 2\% & 1.9616 & 0.3012 & ablation \\
+\rowcolor[gray]{0.90}exp\_004 & Ablation & 2026-05-27 & RF depth ablation (n=300, depth=4, msl=22, wti\_thresh=2\%) — run\_003 & \texttt{RandomForest} & 300 & 4 & 22 & 756 & 2\% & 2.4791 & 0.1485 & ablation \\
+\rowcolor[gray]{0.90}exp\_005 & Ablation & 2026-05-27 & RF best sweep (n=600, depth=2, msl=22, wti\_thresh=2\%) — run\_009 & \texttt{RandomForest} & 600 & 2 & 22 & 756 & 2\% & 2.2959 & 0.1998 & ablation \\
+\rowcolor[gray]{0.90}exp\_006 & Ablation & 2026-05-27 & RF shock-filter ablation — no WTI filter (n=300, depth=2, msl=22) & \texttt{RandomForest} & 300 & 2 & 22 & 756 & 9900\% & 1.8296 & 0.4611 & ablation \\
+\rowcolor[gray]{0.90}exp\_007 & Ablation & 2026-05-27 & RF training-window ablation (n=300, depth=2, msl=22, train\_window=504, wti\_thresh=2\%) & \texttt{RandomForest} & 300 & 2 & 22 & 504 & 2\% & 1.0928 & 0.2460 & ablation \\
+\end{longtable}
+
+\end{document}
