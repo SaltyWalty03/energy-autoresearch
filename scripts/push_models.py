@@ -28,6 +28,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +36,8 @@ ROOT        = Path(__file__).resolve().parent.parent
 MODELS_DIR  = ROOT / "models"
 DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "energy-autoresearch-model")
 POINTER_OBJ = "models/pointer.json"
+# Matches only versioned prefixes like models/20261024_143022/ — never flat models/*.
+_VERSIONED_RE = re.compile(r'^models/\d{8}_\d{6}/$')
 
 
 def _local_md5_hex(path: Path) -> str:
@@ -56,8 +59,8 @@ def _list_versioned_prefixes(bucket) -> list[str]:
     prefixes = []
     for page in iterator.pages:
         prefixes.extend(page.prefixes)
-    # Filter for timestamp-looking prefixes: models/YYYYMMDD_HHMMSS/
-    return sorted(p for p in prefixes if len(p) == len("models/20261024_143022/"))
+    # Accept only models/YYYYMMDD_HHMMSS/ — never flat models/*.pkl or models/*.json.
+    return sorted(p for p in prefixes if _VERSIONED_RE.match(p))
 
 
 def main(dry_run: bool, bucket_name: str, keep: int) -> None:

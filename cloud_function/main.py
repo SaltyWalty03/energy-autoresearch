@@ -341,16 +341,21 @@ def _get_daily_bias_for_asset(
 
 
 def _get_all_daily_biases(gcs: storage.Client, regime_stacks: dict,
-                          prefix: str = MODEL_PREFIX_DEFAULT) -> dict:
+                          prefix: str = MODEL_PREFIX_DEFAULT,
+                          dry_run: bool = False) -> dict:
     """
     Load or recompute per-asset bias entries. Returns dict keyed by ticker.
-    Cache format: {"date": "YYYY-MM-DD", "XLE": {...}, "XLB": {...}, "XOP": {...}}
+    Cache format: {"date": "YYYY-MM-DD", "model_prefix": "models/...", "XLE": {...}, ...}
+    Invalidated when date rolls over OR when model_prefix changes (e.g. after GCS rollback).
+    dry_run=True: cache is read-only — computed biases are NOT written back to GCS.
     """
     today = _today_et()
     cache = _load_bias_cache(gcs)
 
-    if cache.get("date") == today and all(t in cache for t in ASSETS):
-        log.info("Bias cache hit for %s.", today)
+    if (cache.get("date") == today
+            and cache.get("model_prefix") == prefix
+            and all(t in cache for t in ASSETS)):
+        log.info("Bias cache hit for %s (prefix=%s).", today, prefix)
         return {t: cache[t] for t in ASSETS}
 
     log.info("Cache miss for %s — computing daily biases for all assets...", today)
@@ -370,10 +375,12 @@ def _get_all_daily_biases(gcs: storage.Client, regime_stacks: dict,
             result[ticker] = {"bias": 0.0, "direction": "flat", "regime": -1,
                               "wf_sharpe_mean": 0.0, "error": f"{type(exc).__name__}: {exc}"}
 
-    if failed:
+    if dry_run:
+        log.info("DRY_RUN: bias cache not saved (read-only mode).")
+    elif failed:
         log.warning("Bias cache NOT saved — failed assets %s will be retried next cycle.", failed)
     else:
-        _save_bias_cache(gcs, {"date": today, **result})
+        _save_bias_cache(gcs, {"date": today, "model_prefix": prefix, **result})
     return result
 
 
@@ -583,7 +590,8 @@ def run_daily(request):
         log.info("Loading regime stacks for all assets...")
         model_prefix  = _get_model_prefix(gcs)
         regime_stacks = {t: _load_regime_stack(gcs, t, model_prefix) for t in ASSETS}
-        biases = _get_all_daily_biases(gcs, regime_stacks, prefix=model_prefix)
+        biases = _get_all_daily_biases(gcs, regime_stacks, prefix=model_prefix,
+                                       dry_run=dry_run)
 
         equity = float(trade_client.get_account().equity)
         log.info("Account equity: $%.2f", equity)
