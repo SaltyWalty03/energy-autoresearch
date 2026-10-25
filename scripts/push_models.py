@@ -12,14 +12,17 @@ Layout in GCS after upload:
 The cloud function reads pointer.json first; if missing it falls back to models/.
 
 Usage:
+    python scripts/push_models.py --check              # local validation, no GCS auth needed
     python scripts/push_models.py [--dry-run] [--bucket BUCKET] [--keep N]
 
+    --check     Validate manifest.json and confirm all files exist on disk. Exits 0
+                on success, 1 on failure. Does not require GCS credentials.
     --dry-run   Show what would be uploaded without writing.
     --bucket    GCS bucket (default: env GCS_BUCKET or energy-autoresearch-model).
     --keep N    Retain only the N most recent versioned prefixes (default: 3).
                 Orphaned prefixes are deleted after the pointer is updated.
 
-Requires:
+Requires (for --dry-run / live push):
     google-cloud-storage  (pip install google-cloud-storage)
     GCP credentials in environment (gcloud auth application-default login)
 """
@@ -147,11 +150,35 @@ def main(dry_run: bool, bucket_name: str, keep: int) -> None:
         print("Re-run without --dry-run to publish.")
 
 
+def check() -> None:
+    """Validate manifest.json and confirm all files exist on disk. No GCS auth needed."""
+    import sys
+    try:
+        files = _load_manifest()   # raises FileNotFoundError on any problem
+    except FileNotFoundError as exc:
+        print(f"FAIL: {exc}")
+        sys.exit(1)
+    manifest = json.loads(MANIFEST_FILE.read_text())
+    model_files = files[1:]   # strip manifest.json itself (first entry)
+    print(f"manifest.json  trained_at={manifest.get('trained_at', '?')}")
+    print(f"Model files:   {len(model_files)} (per manifest)")
+    print(f"With manifest: {len(files)} total")
+    for p in files:
+        size_kb = p.stat().st_size / 1024
+        print(f"  OK  {p.name:50s}  {size_kb:8.1f} KB")
+    print(f"\nOK — {len(files)} file(s) ready to push.")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true",
+                        help="Validate manifest and file presence locally (no GCS needed)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--bucket", default=DEFAULT_BUCKET)
     parser.add_argument("--keep", type=int, default=3,
                         help="Versioned prefixes to retain (default 3)")
     args = parser.parse_args()
-    main(args.dry_run, args.bucket, args.keep)
+    if args.check:
+        check()
+    else:
+        main(args.dry_run, args.bucket, args.keep)
