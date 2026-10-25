@@ -55,8 +55,12 @@ MODELS_DIR = HERE / "models"
 GCS_BUCKET = "energy-autoresearch-model"
 LOCK_OBJECT = "trade_lock.json"
 LOCK_TTL_SECONDS = 90
-MAX_PORTFOLIO_EXPOSURE_PCT = 0.80   # fraction of equity deployed across all concurrent positions
 MODEL_THRESH = 0.02
+
+CFG = {
+    "gross_cap_pct": float(os.environ.get("GROSS_CAP_PCT", "0.80")),
+}
+MAX_PORTFOLIO_EXPOSURE_PCT = CFG["gross_cap_pct"]  # backward-compat alias
 
 from src.universe import ASSETS
 from src.regime import classify_regime
@@ -381,7 +385,7 @@ def run_daily(request):
             for t, *_ in holds_rd
             if t in pos_by_symbol
         )
-        gross_cap        = MAX_PORTFOLIO_EXPOSURE_PCT * equity
+        gross_cap        = CFG["gross_cap_pct"] * equity
         remaining_cap    = max(0.0, gross_cap - held_gross)
         num_opens        = len(opens_rd)
         per_new_position = remaining_cap / num_opens if num_opens else 0.0

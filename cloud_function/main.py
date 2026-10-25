@@ -53,6 +53,7 @@ Scheduler:
 import io
 import json
 import math
+import os
 import pickle
 from datetime import datetime, timedelta, timezone
 
@@ -102,22 +103,29 @@ class _StructuredLogger:
 log = _StructuredLogger()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-GCS_BUCKET        = "energy-autoresearch-model"
-BIAS_CACHE_OBJ    = "bias_cache.json"
-LOCK_OBJECT       = "trade_lock.json"
-MODEL_POINTER_OBJ = "models/pointer.json"
+GCS_BUCKET           = "energy-autoresearch-model"
+BIAS_CACHE_OBJ       = "bias_cache.json"
+LOCK_OBJECT          = "trade_lock.json"
+MODEL_POINTER_OBJ    = "models/pointer.json"
 MODEL_PREFIX_DEFAULT = "models/"  # fallback when pointer is absent
-LOCK_TTL_SECONDS  = 90
-GCP_PROJECT       = "energy-autoresearch"
-MAX_PORTFOLIO_EXPOSURE_PCT = 0.80   # fraction of equity deployed across all concurrent positions
-MODEL_THRESH      = 0.02
-RSI_OVERSOLD      = 45
-RSI_OVERBOUGHT    = 55
-LOOKBACK_BARS     = 60
-ET                = pytz.timezone("America/New_York")
-MARKET_OPEN       = (9, 30)
-MARKET_CLOSE      = (15, 55)
-BLOCKING_STATUSES = {"partially_filled", "pending_new", "accepted", "new"}
+LOCK_TTL_SECONDS     = 90
+GCP_PROJECT          = "energy-autoresearch"
+MODEL_THRESH         = 0.02
+RSI_OVERSOLD         = 45
+RSI_OVERBOUGHT       = 55
+LOOKBACK_BARS        = 60
+ET                   = pytz.timezone("America/New_York")
+MARKET_OPEN          = (9, 30)
+MARKET_CLOSE         = (15, 55)
+BLOCKING_STATUSES    = {"partially_filled", "pending_new", "accepted", "new"}
+
+# ── Runtime config (override via env vars for local testing) ──────────────────
+CFG = {
+    # Maximum gross notional as a fraction of account equity.
+    # Override: GROSS_CAP_PCT=0.75 python cloud_function/main.py --dry-run
+    "gross_cap_pct": float(os.environ.get("GROSS_CAP_PCT", "0.80")),
+}
+MAX_PORTFOLIO_EXPOSURE_PCT = CFG["gross_cap_pct"]  # backward-compat alias
 
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -525,34 +533,51 @@ def _log_decision_summary(results: dict) -> None:
 
 @functions_framework.http
 def run_daily(request):
-    """HTTP Cloud Function — called every 5 min by Cloud Scheduler."""
+    """HTTP Cloud Function — called every 5 min by Cloud Scheduler.
+
+    DRY_RUN mode (env var DRY_RUN=true):
+      Runs the full pipeline — loads models from GCS, fetches intraday bars,
+      computes the order plan — but does NOT acquire the lock and does NOT
+      place any orders. Prints a human-readable plan to stdout.
+      Useful for local pre-deploy verification.
+
+    Local credentials:
+      In production, ALPACA_API_KEY and ALPACA_SECRET_KEY come from Secret
+      Manager. Locally, set them as env vars and they take precedence.
+    """
+    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     gcs = None
     try:
-        if not _is_market_open():
+        if not dry_run and not _is_market_open():
             now = datetime.now(ET)
             msg = f"Outside market hours ({now.strftime('%a %H:%M ET')}) — no action."
             log.info(msg)
             return (json.dumps({"status": "closed", "message": msg}), 200,
                     {"Content-Type": "application/json"})
 
-        api_key    = _get_secret("ALPACA_API_KEY")
-        secret_key = _get_secret("ALPACA_SECRET_KEY")
+        # Prefer env-var credentials for local dry-runs; fall back to Secret Manager
+        api_key    = (os.environ.get("ALPACA_API_KEY")
+                      or _get_secret("ALPACA_API_KEY"))
+        secret_key = (os.environ.get("ALPACA_SECRET_KEY")
+                      or _get_secret("ALPACA_SECRET_KEY"))
         gcs        = storage.Client()
 
-        # ── Distributed lock ──────────────────────────────────────────────────
-        if not _acquire_lock(gcs, owner="cloud_function"):
-            log.info("NO TRADE: stage=lock (trade lock held by another process).")
-            return (json.dumps({"status": "locked", "message": "Trade lock held."}),
-                    200, {"Content-Type": "application/json"})
+        # ── Distributed lock (skipped in dry-run) ─────────────────────────────
+        if not dry_run:
+            if not _acquire_lock(gcs, owner="cloud_function"):
+                log.info("NO TRADE: stage=lock (trade lock held by another process).")
+                return (json.dumps({"status": "locked", "message": "Trade lock held."}),
+                        200, {"Content-Type": "application/json"})
 
         # ── Pending order guard ───────────────────────────────────────────────
         trade_client = TradingClient(api_key, secret_key, paper=True)
-        pending = _check_pending_orders(trade_client)
-        if pending:
-            log.warning("NO TRADE: stage=pending_orders. %s", pending)
-            _release_lock(gcs)
-            return (json.dumps({"status": "pending", "message": pending}), 200,
-                    {"Content-Type": "application/json"})
+        if not dry_run:
+            pending = _check_pending_orders(trade_client)
+            if pending:
+                log.warning("NO TRADE: stage=pending_orders. %s", pending)
+                _release_lock(gcs)
+                return (json.dumps({"status": "pending", "message": pending}), 200,
+                        {"Content-Type": "application/json"})
 
         # ── Layer 1+2: regime + daily bias (cached per asset) ─────────────────
         log.info("Loading regime stacks for all assets...")
@@ -666,7 +691,7 @@ def run_daily(request):
             for t, *_ in holds
             if t in pos_by_symbol
         )
-        gross_cap        = MAX_PORTFOLIO_EXPOSURE_PCT * equity
+        gross_cap        = CFG["gross_cap_pct"] * equity
         remaining_cap    = max(0.0, gross_cap - held_gross)
         num_opens        = len(opens)
         per_new_position = remaining_cap / num_opens if num_opens else 0.0
@@ -686,21 +711,23 @@ def run_daily(request):
                 delta_shares    = current_qty - target_shares  # always > 0 (we're reducing)
                 if delta_shares > 0:
                     reduce_side = OrderSide.SELL if direction == "long" else OrderSide.BUY
-                    try:
-                        order = trade_client.submit_order(MarketOrderRequest(
-                            symbol=ticker, qty=delta_shares, side=reduce_side,
-                            time_in_force=TimeInForce.DAY,
-                        ))
-                        log.info("REDUCE %s: %s %d sh (from %d → %d target)  order=%s",
-                                 ticker, reduce_side.value.upper(), delta_shares,
-                                 current_qty, target_shares, order.id)
-                        asset_result.update({"action": "reduce", "qty": delta_shares,
-                                             "order_id": str(order.id),
-                                             "reason": f"held_gross {held_gross:.0f} > cap {gross_cap:.0f}"})
-                    except Exception as exc:
-                        log.error("REDUCE %s failed: %s", ticker, exc)
-                        asset_result["action"] = "reduce_failed"
-                        asset_result["reason"] = str(exc)
+                    log.info("REDUCE %s: %s %d sh (from %d → %d target)%s",
+                             ticker, reduce_side.value.upper(), delta_shares,
+                             current_qty, target_shares, "  [DRY RUN]" if dry_run else "")
+                    asset_result.update({"action": "reduce" + ("_dry" if dry_run else ""),
+                                         "qty": delta_shares,
+                                         "reason": f"held_gross {held_gross:.0f} > cap {gross_cap:.0f}"})
+                    if not dry_run:
+                        try:
+                            order = trade_client.submit_order(MarketOrderRequest(
+                                symbol=ticker, qty=delta_shares, side=reduce_side,
+                                time_in_force=TimeInForce.DAY,
+                            ))
+                            asset_result["order_id"] = str(order.id)
+                        except Exception as exc:
+                            log.error("REDUCE %s failed: %s", ticker, exc)
+                            asset_result["action"] = "reduce_failed"
+                            asset_result["reason"] = str(exc)
                     results[ticker] = asset_result
 
         # Remove holds from plan — only process opens below
@@ -717,12 +744,16 @@ def run_daily(request):
                                  "notional_allocated": round(per_new_position, 2)})
 
             if current_dir != "flat":
-                if not _close_position(trade_client, ticker):
+                if dry_run:
+                    log.info("%s: would close %s %d sh  [DRY RUN]", ticker, current_dir, current_qty)
+                    current_qty = 0
+                elif not _close_position(trade_client, ticker):
                     asset_result["action"] = "close_failed"
                     asset_result["reason"] = f"close of {current_dir} {current_qty} sh failed — open skipped"
                     results[ticker] = asset_result
                     continue
-                current_qty = 0
+                else:
+                    current_qty = 0
 
             current_signed = current_qty if current_dir == "long" else -current_qty
             target_signed  = target_shares if direction == "long" else -target_shares
@@ -737,28 +768,74 @@ def run_daily(request):
                     if target_shares < 1 else "delta=0"
                 )
             else:
-                side  = OrderSide.BUY if delta > 0 else OrderSide.SELL
-                order = trade_client.submit_order(MarketOrderRequest(
-                    symbol=ticker, qty=abs(delta), side=side,
-                    time_in_force=TimeInForce.DAY,
-                ))
-                log.info("Order: %s %d %s @ ~$%.2f  notional=$%.0f  wf=%.4f",
+                side = OrderSide.BUY if delta > 0 else OrderSide.SELL
+                log.info("Order%s: %s %d %s @ ~$%.2f  notional=$%.0f  wf=%.4f",
+                         " [DRY RUN]" if dry_run else "",
                          side.value.upper(), abs(delta), ticker, latest_price,
                          abs(delta) * latest_price, wf_sharpe)
                 asset_result.update({
-                    "action": side.value, "qty": abs(delta),
-                    "order_id": str(order.id),
+                    "action": side.value + ("_dry" if dry_run else ""),
+                    "qty": abs(delta),
                 })
+                if not dry_run:
+                    order = trade_client.submit_order(MarketOrderRequest(
+                        symbol=ticker, qty=abs(delta), side=side,
+                        time_in_force=TimeInForce.DAY,
+                    ))
+                    asset_result["order_id"] = str(order.id)
 
             results[ticker] = asset_result
 
         _log_decision_summary(results)
-        _release_lock(gcs)
-        return (json.dumps({"status": "ok", "equity": equity, "assets": results}),
-                200, {"Content-Type": "application/json"})
+        if not dry_run:
+            _release_lock(gcs)
+
+        payload = {"status": "dry_run" if dry_run else "ok",
+                   "equity": equity, "assets": results}
+        if dry_run:
+            log.info("=== DRY RUN COMPLETE — no orders placed ===")
+        return (json.dumps(payload), 200, {"Content-Type": "application/json"})
 
     except Exception as exc:
         log.exception("run_daily failed: %s", exc)
-        if gcs:
+        if gcs and not (os.environ.get("DRY_RUN", "false").lower() == "true"):
             _release_lock(gcs)
         return (json.dumps({"error": str(exc)}), 500, {"Content-Type": "application/json"})
+
+
+# ── Local dry-run entry point ─────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Dry-run the cloud function locally against the paper account."
+    )
+    parser.add_argument("--dry-run", action="store_true", default=True,
+                        help="Simulate orders without placing them (default: True)")
+    parser.add_argument("--no-dry-run", dest="dry_run", action="store_false",
+                        help="Actually place orders (dangerous — confirm before using)")
+    parser.add_argument("--skip-hours-check", action="store_true",
+                        help="Run outside market hours for testing")
+    args = parser.parse_args()
+
+    if args.dry_run:
+        os.environ["DRY_RUN"] = "true"
+    if args.skip_hours_check:
+        # Monkey-patch market hours check so it always returns True
+        _is_market_open_orig = _is_market_open
+        def _is_market_open():  # noqa: F811
+            return True
+
+    class _MockRequest:
+        method = "POST"
+        args = {}
+        get_json = lambda s, **kw: None
+
+    body, status, headers = run_daily(_MockRequest())
+    import json as _json
+    data = _json.loads(body)
+
+    print(f"\nHTTP {status}")
+    print(_json.dumps(data, indent=2))

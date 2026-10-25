@@ -1,0 +1,33 @@
+{
+  "displayName": "run-daily: No decision logged (heartbeat)",
+  "documentation": {
+    "content": "The run-daily function emitted zero DECISION or NO TRADE log lines over the last 8 hours. This fires on any full trading day where the function reached no decision — caused by: (1) Scheduler not dispatching, (2) function crashing before the decision stage, or (3) the GCS lock being held for the whole day. Per-asset exceptions that return HTTP 200 do NOT suppress this alert because they still emit a decision summary line.\n\nTo investigate: check Cloud Scheduler job history, then Cloud Logging for `run_daily failed` or lock-held messages.",
+    "mimeType": "text/markdown"
+  },
+  "conditions": [
+    {
+      "displayName": "decision_count == 0 over 8h",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"run-daily\" AND metric.type=\"logging.googleapis.com/user/decision_count\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "28800s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": ["resource.labels.service_name"]
+          }
+        ],
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 1,
+        "duration": "0s",
+        "trigger": {"count": 1}
+      }
+    }
+  ],
+  "alertStrategy": {
+    "autoClose": "86400s",
+    "notificationRateLimit": {"period": "28800s"}
+  },
+  "combiner": "OR",
+  "enabled": true
+}

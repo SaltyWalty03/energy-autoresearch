@@ -1,0 +1,12 @@
+{
+  "name": "decision_count",
+  "description": "Counts DECISION and NO TRADE log lines emitted by run-daily. Each successful pipeline execution (past market-hours check, lock, model load, intraday) emits exactly one such line. Zero for a full trading day means the function stopped reaching the decision stage.",
+  "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"run-daily\" AND (jsonPayload.message=~\"^DECISION\" OR jsonPayload.message=~\"^NO TRADE\")",
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "labels": []
+  },
+  "labelExtractors": {}
+}
